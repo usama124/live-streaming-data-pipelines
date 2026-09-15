@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: consumer-${PIPELINE_ID}
+  labels:
+    app: consumer
+    pipeline-id: ${PIPELINE_ID}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: consumer
+      pipeline-id: ${PIPELINE_ID}
+  template:
+    metadata:
+      labels:
+        app: consumer
+        pipeline-id: ${PIPELINE_ID}
+    spec:
+      containers:
+        - name: consumer
+          image: data-platform-consumer:latest
+          env:
+            - name: PIPELINE_ID
+              value: ${PIPELINE_ID}
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: data-platform-secrets
+                  key: redis-url
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: kafka:9092
+            - name: KAFKA_TOPIC
+              value: pipeline.${PIPELINE_ID}.events
+            - name: KAFKA_GROUP_ID
+              value: consumer-${PIPELINE_ID}
+            - name: CLICKHOUSE_HOST
+              value: clickhouse
+            - name: BATCH_SIZE
+              value: "500"
+            - name: FLUSH_INTERVAL_SECONDS
+              value: "60"
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "1"
+              memory: "1Gi"

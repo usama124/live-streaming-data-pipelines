@@ -1,0 +1,12 @@
+{
+  "pipeline_id": "pipeline-001",
+  "pipeline_type": "live",
+  "source_type": "mock",
+  "topic": "pipeline.pipeline-001.events",
+  "batch_size": 500,
+  "flush_interval_seconds": 60,
+  "source_options": {
+    "min_delay_ms": 100,
+    "max_delay_ms": 500
+  }
+}

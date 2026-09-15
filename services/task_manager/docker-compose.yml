@@ -1,0 +1,61 @@
+services:
+
+  # ── Task Manager API ────────────────────────────────────────────────────────
+  task-manager:
+    build:
+      context: .
+      dockerfile: task_manager/Dockerfile
+    image: data-platform-task-manager:latest
+    deploy:
+      replicas: 1
+    env_file: .env
+    ports:
+      - "8000:8000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /home/usama/Videos/stratahub-live-streaming/pipeline_definitions:/opt/pipeline_definitions
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - backend
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  # ── Controller — 1 replica, Redis leader-locked ─────────────────────────────
+  controller:
+    build:
+      context: .
+      dockerfile: controller/Dockerfile
+    image: data-platform-controller:latest
+    env_file: .env
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - backend
+    restart: unless-stopped
+
+  # ── Watchdog — 1 replica, Redis leader-locked ───────────────────────────────
+  watchdog:
+    build:
+      context: .
+      dockerfile: watchdog/Dockerfile
+    image: data-platform-watchdog:latest
+    env_file: .env
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - backend
+    restart: unless-stopped
+
+networks:
+  backend:
+    driver: bridge

@@ -1,0 +1,161 @@
+services:
+
+  # ── Infrastructure ──────────────────────────────────────────────────────
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    ports:
+      - "6380:6379"
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  kafka:
+    image: bitnami/kafka:latest
+    container_name: kafka
+    ports:
+      - "9094:9094"
+    environment:
+      - KAFKA_CFG_NODE_ID=0
+      - KAFKA_CFG_PROCESS_ROLES=controller,broker
+      - KAFKA_CFG_CONTROLLER_QUORUM_VOTERS=0@kafka:9093
+      - KAFKA_CFG_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093,EXTERNAL://:9094
+      - KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092,EXTERNAL://localhost:9094
+      - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
+      - KAFKA_CFG_CONTROLLER_LISTENER_NAMES=CONTROLLER
+      - KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE=true
+      - ALLOW_PLAINTEXT_LISTENER=yes
+    volumes:
+      - kafka-data:/bitnami/kafka
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "kafka-topics.sh", "--bootstrap-server", "localhost:9092", "--list"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 20s
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8
+    container_name: clickhouse
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    environment:
+      - CLICKHOUSE_DB=data_platform
+      - CLICKHOUSE_USER=default
+      - CLICKHOUSE_PASSWORD=
+      - CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+      - ./clickhouse/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # ── Task Manager ─────────────────────────────────────────────────────────
+
+  task-manager:
+    build:
+      context: .
+      dockerfile: services/task_manager/Dockerfile
+    image: data-platform-task-manager:latest
+    container_name: task-manager
+    ports:
+      - "8000:8000"
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - RUNTIME_MODE=docker
+      - DOCKER_NETWORK=data-platform_backend
+      - PRODUCER_IMAGE=data-platform-producer:latest
+      - CONSUMER_IMAGE=data-platform-consumer:latest
+      - AIRFLOW_ENABLED=false
+      - CLICKHOUSE_HOST=clickhouse
+      - CLICKHOUSE_PORT=8123
+      - CLICKHOUSE_USERNAME=default
+      - CLICKHOUSE_PASSWORD=
+      - CLICKHOUSE_DATABASE=data_platform
+      - CLICKHOUSE_TABLE=pipeline_events
+      # ── Folder watcher ──────────────────────────────────────────────────
+      - PIPELINE_DEFINITIONS_DIR=/opt/pipeline_definitions
+      - WATCHER_POLL_INTERVAL_S=5
+      - WATCHER_ENABLED=true
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Mount a local directory so your backend can drop definition files in.
+      # Change ./pipeline_definitions to wherever your backend writes files.
+      - ./pipeline_definitions:/opt/pipeline_definitions
+    depends_on:
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    networks:
+      - backend
+    restart: unless-stopped
+
+  # ── OPC UA mock server (dev/CI — remove in production) ──────────────────
+
+  opcua-mock:
+    build:
+      context: .
+      dockerfile: services/producer_service/Dockerfile
+    image: data-platform-producer:latest
+    container_name: opcua-mock
+    command: ["python", "-m", "app.sources.opcua_source"]
+    ports:
+      - "4840:4840"
+    networks:
+      - backend
+    profiles:
+      - opcua
+    restart: unless-stopped
+
+  # ── Image build targets (not started normally) ───────────────────────────
+
+  producer-template:
+    build:
+      context: .
+      dockerfile: services/producer_service/Dockerfile
+    image: data-platform-producer:latest
+    profiles:
+      - templates
+    command: ["python", "-c", "print('producer image build target only')"]
+    networks:
+      - backend
+
+  consumer-template:
+    build:
+      context: .
+      dockerfile: services/consumer_service/Dockerfile
+    image: data-platform-consumer:latest
+    profiles:
+      - templates
+    command: ["python", "-c", "print('consumer image build target only')"]
+    networks:
+      - backend
+
+networks:
+  backend:
+    name: data-platform_backend
+
+volumes:
+  redis-data:
+  kafka-data:
+  clickhouse-data:

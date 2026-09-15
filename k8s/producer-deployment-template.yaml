@@ -1,0 +1,43 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: producer-${PIPELINE_ID}
+  labels:
+    app: producer
+    pipeline-id: ${PIPELINE_ID}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: producer
+      pipeline-id: ${PIPELINE_ID}
+  template:
+    metadata:
+      labels:
+        app: producer
+        pipeline-id: ${PIPELINE_ID}
+    spec:
+      containers:
+        - name: producer
+          image: data-platform-producer:latest
+          env:
+            - name: PIPELINE_ID
+              value: ${PIPELINE_ID}
+            - name: SOURCE_TYPE
+              value: mock
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: data-platform-secrets
+                  key: redis-url
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: kafka:9092
+            - name: KAFKA_TOPIC
+              value: pipeline.${PIPELINE_ID}.events
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"

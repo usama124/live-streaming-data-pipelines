@@ -1,0 +1,4 @@
+quixstreams==3.23.6
+clickhouse-connect==0.8.14
+pydantic-settings==2.7.1
+redis==5.2.1
