@@ -151,6 +151,10 @@ Goal: replace the custom producer container with Telegraf running a thin connect
       watchdog used to guarantee, so nothing regresses before Phase 3 removes the watchdog
 - [ ] Update `task_manager`'s pipeline-create path to generate the per-pipeline Telegraf
       config instead of the old producer container's env vars
+- [ ] Ship `THIRD-PARTY-NOTICES.md` with the producer image (Telegraf, MIT, © InfluxData).
+      MIT requires the notice in any substantial distribution — the trap is a multi-stage
+      Dockerfile that copies the binary out of the upstream image and leaves `LICENSE`
+      behind. See the decision memo's Proposal A for which distribution forms trigger it
 - [ ] **Known gap, not fixed by this phase:** Telegraf restarts the subprocess only if it
       exits. A silently-dead OPC UA session (process alive, no data) is not caught here —
       this is what Phase 3's liveness probe exists to cover. Do not treat Phase 1 as done
@@ -204,12 +208,16 @@ Goal: one shared, regex-subscribed consumer pool replaces Quix Streams and the s
       (`ClickHouseSink._ensure_table()`'s current behavior) and instead create the table from
       an explicit per-pipeline schema at pipeline-creation time, keyed by topic name → table
       name (not the current global `CLICKHOUSE_TABLE` setting in `docker_runtime.py:94`)
-- [ ] Add `PipelineConfig.table` (currently absent — the config has no table field at all)
-- [ ] **Design and implement dead-letter handling before this ships**, not after: no
-      exception may escape the write path, since one bad record must not stall every other
-      pipeline sharing the pool. Land a written spec for this (insert-side try/catch → DLQ
-      topic or table) before merging the consumer loop, per the open item flagged in the
-      decision PDF
+- [ ] Add `PipelineConfig.table` and `PipelineConfig.tenant_id` (both currently absent).
+      Table naming is `user_<user_id>_collection_<collection_number>_<table_name>`, with
+      `table_name` validated against `^[a-z_][a-z0-9_]*$` at creation time — it reaches
+      ClickHouse as an identifier, so that check is a trust boundary, not formatting
+- [ ] **Implement dead-letter handling before this ships**, not after: no exception may
+      escape the write path, since one bad record must not stall every other pipeline
+      sharing the pool. The spec is written — Proposal E in the decision memo for the
+      reasoning, `ARCHITECTURE.md` §3.3.1 for the contract (error classification with
+      transient as the fail-safe default, batch bisection, the shared `dead_letters` table,
+      and the insert → dead-letter → commit ordering). Implement that; do not redesign it
 - [ ] Remove the Quix Streams dependency and the sync-to-async bridge it required
 - [ ] Update `task_manager`'s pipeline-create path to create the Kafka topic **and** the
       ClickHouse table before starting the producer (per the decision memo's creation flow)
@@ -361,13 +369,13 @@ Phase 4 integration suite passes.
 
 ## Cross-cutting items — resolve alongside the phase they block
 
-| Item | Blocks | Action needed |
+| Item | Blocks | Status |
 |---|---|---|
-| Telegraf MIT license | Phase 1 | Confirm with legal it closes the question cleanly (no known blocker) |
-| Dead-letter design spec | Phase 2 | Write the spec before the consumer loop merges, not after |
-| Liveness probe thresholds | Phase 3 | Needs actual numbers per source type before rollout |
-| `tenant_id` | Phase 2 (table-per-topic design) | Absent from the codebase entirely; decide the schema before finalizing per-pipeline tables, since retrofitting multi-tenancy after tables exist is more expensive |
-| Sequencing vs. Stratahub merge | All phases | Decide whether this merges into Stratahub before or after this work — affects whether phases ship as a standalone repo release or a merge PR |
+| Telegraf MIT license | Phase 1 | **Resolved 2026-09-21.** MIT confirmed. Remaining work is attribution, not a decision — see Proposal A and the Phase 1 task below |
+| Dead-letter design spec | Phase 2 | **Resolved 2026-09-21.** Spec written: Proposal E (reasoning), `ARCHITECTURE.md` §3.3.1 (contract) |
+| `tenant_id` | Phase 2 (table-per-topic design) | **Resolved 2026-09-21.** Proposal F: `user_<user_id>_collection_<collection_number>_<table_name>`, `tenant_id` also an explicit column |
+| Sequencing vs. Stratahub merge | All phases | **Resolved 2026-09-21.** Proposal G: standalone through Phase 4, then one merge PR |
+| Liveness probe thresholds | Phase 3 | **Open — the only one left.** Needs a measured number per source type, not a guess; depends on each source's real publishing interval |
 
 ---
 

@@ -9,10 +9,7 @@ one-line pointer to the commit/PR that closed it — don't delete history from t
 
 | Item | Blocks | Notes |
 |---|---|---|
-| Dead-letter design spec | Phase 2 (consumer pool) | No exception may escape the write path. Insert-then-commit ordering must be finalized before the consumer loop merges, not retrofitted after. |
-| Liveness probe thresholds | Phase 3 (orchestration) | Needs an actual staleness number per source type (OPC UA now; AVEVA/Modbus later), not just the mechanism. |
-| `tenant_id` schema design | Phase 2 (per-pipeline tables) | Absent from the design as of this writing despite the SaaS direction. Retrofitting after tables exist is more expensive than deciding now. |
-| Telegraf MIT license sign-off | Phase 1 (producer) | No known blocker — needs a formal confirmation from legal, not a technical decision. |
+| Liveness probe thresholds | Phase 3 (orchestration) | **The only unresolved blocking item.** Needs an actual staleness number per source type (OPC UA now; AVEVA/Modbus later), not just the mechanism. Cannot be picked from first principles — it depends on each source's real publishing interval, so it needs a measurement from a live source, not a guess. |
 
 ## Follow-on work — not blocking, sequenced after the core build
 
@@ -28,8 +25,9 @@ one-line pointer to the commit/PR that closed it — don't delete history from t
 | Item | Why it matters |
 |---|---|
 | Per-record lineage / compliance requirement | If required, Apache NiFi's data provenance is the strongest open-source option — but adopting NiFi as the data plane is a bigger architectural swing than anything currently planned. Settle this before it forces a redesign mid-build. |
-| Sequencing vs. any future platform merge | Affects whether this ships as a standalone release or a merge PR. Not yet decided. |
 | Docker Compose as a long-term supported deployment mode | Current assumption: yes, keep `DockerRuntime` behind `RuntimeAdapter` alongside `KubernetesRuntime`. Revisit if the cost of maintaining two runtimes outweighs the value. |
+| ClickHouse database-per-tenant vs. flat table naming | `user_1_collection_12.sensor_data` (a database per tenant) would give GRANT-based isolation and make tenant deletion a `DROP DATABASE` instead of a prefix scan. The flat scheme is the adopted decision (Proposal F); this is recorded because it is cheap to note now and expensive to retrofit once tables exist. |
+| Tenant isolation *enforcement* | Proposal F settles tenancy **naming**, not enforcement. A name prefix does not stop a query reading another tenant's table. Row policies, per-tenant ClickHouse users, or separate databases are the real options. Blocks the Phase 4 per-tenant health API, not Phase 2. |
 | Two overlapping Compose files | The root `docker-compose.yml` owns the infrastructure and the network; `services/task_manager/docker-compose.yml` owns API + controller + watchdog and now joins that network as external. Neither runs the full system alone. Phase 3 deletes controller and watchdog — decide then whether the sub-stack folds into the root file or stays. |
 
 ## Explicitly rejected — do not re-litigate without new information
@@ -47,3 +45,7 @@ silently reversing course in code.
 |---|---|
 | P0 clean-checkout blockers (stale build path, missing `clickhouse/init.sql`, hardcoded `/home/usama/Videos` mount, dead `172.22.0.1` pins, network name mismatch, no `.env.example` for the task_manager stack) | Phase 0 — verified by `tests/phase0/integration/test_clean_checkout.py` |
 | `bitnami/kafka:latest` no longer resolves (Bitnami retired those tags to `bitnamilegacy/`) | Phase 0 — root Compose pinned to `apache/kafka:3.9.1`. Found by the Phase 0 smoke test, not on the original checklist. |
+| Dead-letter design spec | Decided 2026-09-21 — `DECISION-live-pipeline-simplification.md` Proposal E (reasoning), `ARCHITECTURE.md` §3.3.1 (contract). Unblocks the Phase 2 consumer loop. |
+| `tenant_id` schema design | Decided 2026-09-21 — Proposal F: `user_<user_id>_collection_<collection_number>_<table_name>`, with `tenant_id` also an explicit column. |
+| Telegraf MIT license sign-off | Confirmed 2026-09-21 (Kamran). Attribution obligation written up per distribution form in Proposal A; Phase 1 carries the `THIRD-PARTY-NOTICES.md` task. |
+| Sequencing vs. any future platform merge | Decided 2026-09-21 — Proposal G: standalone through Phase 4, then a single merge PR into Stratahub. |
