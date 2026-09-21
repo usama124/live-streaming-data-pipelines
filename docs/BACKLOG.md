@@ -30,6 +30,7 @@ one-line pointer to the commit/PR that closed it — don't delete history from t
 | Per-record lineage / compliance requirement | If required, Apache NiFi's data provenance is the strongest open-source option — but adopting NiFi as the data plane is a bigger architectural swing than anything currently planned. Settle this before it forces a redesign mid-build. |
 | Sequencing vs. any future platform merge | Affects whether this ships as a standalone release or a merge PR. Not yet decided. |
 | Docker Compose as a long-term supported deployment mode | Current assumption: yes, keep `DockerRuntime` behind `RuntimeAdapter` alongside `KubernetesRuntime`. Revisit if the cost of maintaining two runtimes outweighs the value. |
+| Two overlapping Compose files | The root `docker-compose.yml` owns the infrastructure and the network; `services/task_manager/docker-compose.yml` owns API + controller + watchdog and now joins that network as external. Neither runs the full system alone. Phase 3 deletes controller and watchdog — decide then whether the sub-stack folds into the root file or stays. |
 
 ## Explicitly rejected — do not re-litigate without new information
 
@@ -42,4 +43,7 @@ silently reversing course in code.
 
 ## Resolved
 
-_(empty — nothing closed yet)_
+| Item | Closed by |
+|---|---|
+| P0 clean-checkout blockers (stale build path, missing `clickhouse/init.sql`, hardcoded `/home/usama/Videos` mount, dead `172.22.0.1` pins, network name mismatch, no `.env.example` for the task_manager stack) | Phase 0 — verified by `tests/phase0/integration/test_clean_checkout.py` |
+| `bitnami/kafka:latest` no longer resolves (Bitnami retired those tags to `bitnamilegacy/`) | Phase 0 — root Compose pinned to `apache/kafka:3.9.1`. Found by the Phase 0 smoke test, not on the original checklist. |
