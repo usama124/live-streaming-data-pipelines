@@ -1,14 +1,13 @@
 """ClickHouse table identity — `ch_unique_identifier`.
 
-Mirrors what normal (batch) pipelines build in dataavalanche-be:
+This is the live path's own function (see the module docstring). These tests pin
+its *format* against the shape the batch path builds in dataavalanche-be:
 
     collection_reference = f"collection_{n}"              # data_pipeline_helper.py:52
     prefix               = f"user_{user_id}_{collection_reference}"   # dagUtils.py:211
 
-There is no shared function to call — that expression is inlined 21 times across
-three files in that repo — so this is the single implementation on the live side,
-and the extraction point when the two codebases merge. These tests pin the
-composition against the batch form so the two cannot drift silently.
+Both paths must name the same table for the same inputs, so the format is the
+contract even though the code is separate.
 """
 
 from __future__ import annotations

@@ -25,7 +25,6 @@ one-line pointer to the commit/PR that closed it — don't delete history from t
 
 | Item | Why it matters |
 |---|---|
-| `ch_unique_identifier` has no shared function to call — yet | The instruction was to call the function normal pipelines already use. There isn't one: `dataavalanche-be` builds the identifier as an inline f-string **21 times across three files** (`api/helpers/data_pipeline_helper.py:52` for `collection_reference`, `app/utils/dagUtils.py` and `app/scripts/dag_generator.py` for the prefix). This repo may not modify that path (CLAUDE.md), so `common/app_common/ch_naming.py` is the live-side implementation and the tests pin it to the batch expression. **At merge, extract one function and move all 22 call sites onto it** — until then the guard against drift is a test, not the type system. |
 | Per-record lineage / compliance requirement | If required, Apache NiFi's data provenance is the strongest open-source option — but adopting NiFi as the data plane is a bigger architectural swing than anything currently planned. Settle this before it forces a redesign mid-build. |
 | Sequencing vs. any future platform merge | Affects whether this ships as a standalone release or a merge PR. Not yet decided. |
 | Docker Compose as a long-term supported deployment mode | Current assumption: yes, keep `DockerRuntime` behind `RuntimeAdapter` alongside `KubernetesRuntime`. Revisit if the cost of maintaining two runtimes outweighs the value. |
@@ -44,7 +43,7 @@ silently reversing course in code.
 | Item | Closed by |
 |---|---|
 | Dead-letter design spec | Phase 2 — `ARCHITECTURE.md` §3.3.1 and `services/consumer_pool/app/sink.py`. Per-record isolation, shared `dead_letter_events` table, `dlq_rows_total{pipeline_id}`, no automatic replay. Registry #11 and #11b cover it. |
-| `ch_unique_identifier` / table identity | Phase 2 — `common/app_common/ch_naming.py`, pinned against the batch expression by tests. **Note:** no shared function existed to call; see the open item below. |
+| `ch_unique_identifier` / table identity | Phase 2 — `common/app_common/ch_naming.py`. Decided 2026-09-21: the live path owns its own function; batch builds the same shape inline in another repo, so the *format* is the contract and `tests/phase2/unit/test_ch_naming.py` pins it. |
 
 - **ClickHouse table naming / "tenant_id" schema design** — there is no separate `tenant_id`
   concept in this system. Live pipelines reuse the exact `ch_unique_identifier` scheme

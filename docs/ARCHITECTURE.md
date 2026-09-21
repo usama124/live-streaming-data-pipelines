@@ -144,11 +144,11 @@ Three layers, not one:
   user_<user_id>_collection_<collection_number>_<table_name>
   ```
 
-  e.g. `user_1_collection_22_aveva_iot`. Live pipelines generate this identifier **using the
-  exact same logic normal pipelines already use** — do not reimplement it. If normal
-  pipelines call a shared naming function/module for this, live pipelines call the same one;
-  if no shared function exists yet, extracting one both paths call is the correct fix, not
-  writing a second implementation that can drift from the first.
+  e.g. `user_1_collection_22_aveva_iot`. The live path generates this with its own function,
+  `common/app_common/ch_naming.py` — every component calls it rather than rebuilding the
+  string. The batch path builds the same shape independently (inline, in another repo), so
+  the **format** is a cross-repo contract even though the code is not shared: both must name
+  the same table for the same inputs. `tests/phase2/unit/test_ch_naming.py` pins it.
 - Kafka topic naming (`pipeline.<id>.events`, matched by `pipeline.*.events`) is a separate,
   internal identifier — it is **not** the ClickHouse table name. The consumer pool resolves
   topic → `PipelineConfig` → `ch_unique_identifier` to know which table to write to.

@@ -1,29 +1,25 @@
 from __future__ import annotations
 
-"""ClickHouse table identity, shared by every live-pipeline component.
+"""ClickHouse table identity for live pipelines.
 
     ch_unique_identifier(1, 22, "aveva_iot") -> "user_1_collection_22_aveva_iot"
 
-Normal (batch) pipelines in `dataavalanche-be` build the same string, but as an
-inline f-string repeated 21 times across three files — there is no function there
-to call:
+**This is the live path's own implementation, by decision (Kamran, 2026-09-21).**
+The batch path in `dataavalanche-be` produces the same shape, but builds it as an
+inline f-string in 21 places rather than exposing anything importable, and this
+repo does not reach into that codebase (CLAUDE.md). So the live path generates
+its own identifier here, and this module is the single place it happens.
 
-    api/helpers/data_pipeline_helper.py:52   collection_reference = f"collection_{n}"
-    app/utils/dagUtils.py:211                f"user_{user_id}_{collection_reference}"
-    app/scripts/dag_generator.py             PREPEND / TGT_TBL, same expression
+What still matters is the *format*: both paths must name the same table for the
+same user, collection and table name, or a merged system would read and write
+different places. tests/phase2/unit/test_ch_naming.py pins the composition
+against the batch expression for exactly that reason. Change the format here only
+with a matching change there.
 
-This module is therefore the single implementation on the live side, and the
-place to extract *both* paths onto when the two codebases merge. Until then this
-repo must not reach into the batch path (see CLAUDE.md), so the guard against
-drift is the test suite: tests/phase2/unit/test_ch_naming.py pins this
-composition against the batch expression character for character.
-
-Validation is deliberately reject-not-rewrite. `table_name` is customer-
-influenced and lands in DDL as an identifier, so it needs checking at the
-boundary — but silently normalising it (lowercasing, stripping) would make the
-live path name a *different* table than batch for the same input, which is
-exactly the drift this is supposed to prevent. Anything batch would accept, this
-accepts unchanged; anything else raises.
+Validation is reject-not-rewrite. `table_name` is customer-influenced and lands
+in DDL as an identifier, so it is checked at the boundary — but silently
+normalising it (lowercasing, stripping) would name a *different* table than the
+same input names in batch, so anything questionable raises instead.
 """
 
 import re
