@@ -36,7 +36,6 @@ class Settings(BaseSettings):
     runtime_mode:  str = "docker"
     docker_network: str = "data-platform_backend"
     producer_image: str = "data-platform-producer:latest"
-    consumer_image: str = "data-platform-consumer:latest"
 
     # ── ClickHouse (passed through to consumer containers) ────────────────
     clickhouse_host:     str = "172.17.0.1"

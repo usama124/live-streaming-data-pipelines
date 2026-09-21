@@ -54,31 +54,10 @@ owns everything downstream — batching, the Kafka producer, retry/backoff, Prom
 Standard protocols (MQTT) use Telegraf's native input directly — no custom connector needed.
 Proprietary/industrial sources (OPC UA now, AVEVA planned) get a thin connector script.
 
-As built (Phase 1): `connectors/opcua/connector.py`, launched by a per-pipeline config
-rendered from `telegraf/templates/opcua.conf.tmpl`. The image is
-`services/producer_service/Dockerfile` — Telegraf plus the connector in a venv.
-
-**Reconnect is exit-and-restart, not an internal backoff loop.** Any connection or session
-failure logs to stderr and exits non-zero; Telegraf restarts the connector after
-`restart_delay` (10s, against the 30s the watchdog it replaces allowed). This is deliberate:
-an internal retry loop is indistinguishable, from the outside, from a connector that is alive
-and doing nothing — and that is the one state nothing downstream can detect. A bounded
-handshake timeout (`OPCUA_CONNECT_TIMEOUT_S`, default 4s) covers the endpoint that accepts
-TCP and then never answers.
-
-**Back-pressure, not dropping.** The connector writes each record straight to stdout, so a
-slow reader blocks the subscription. The implementation this replaces buffered into a bounded
-queue and dropped on overflow; silent loss is worse than back-pressure.
-
-**Trap — `json_string_fields`.** Telegraf's JSON parser drops non-numeric values unless the
-field is named there, with no error logged. A string reading (`MachineStatus = "RUNNING"`)
-vanishes silently if it is missing. The template lists `value`; registry #3 covers it.
-
 **Known gap:** Telegraf restarts the subprocess only if it exits. A silently-dead source
 session (process alive, no data) is not detected by Telegraf. This is covered by the
 Kubernetes liveness probe (§3.4), not by Telegraf itself — do not treat a connector as
-production-ready without it. Registry #7 holds this as a `strict` xfail, so it fails the
-suite if it ever starts passing without the marker being removed deliberately.
+production-ready without it.
 
 ### 3.2 Consumer pool
 
@@ -100,93 +79,6 @@ One table per pipeline, created explicitly from a declared schema at pipeline-cr
 pipelines with different field sets collide on a shared or ambiguous table; it must not
 happen in this design.
 
-**Naming.** `user_<user_id>_collection_<collection_number>_<table_name>`, e.g.
-`user_1_collection_12_sensor_data`. `tenant_id` is the derived prefix,
-`user_<user_id>_collection_<collection_number>`, and is **also an explicit column on every
-row** — nothing may parse tenancy back out of a table name. `table_name` is
-customer-influenced and validated at pipeline-creation time against `^[a-z_][a-z0-9_]*$`,
-lowercased, composed name capped at 128 characters: it reaches ClickHouse as an identifier,
-so that check is a trust boundary. See the decision memo's Proposal F.
-
-**Topic → table resolution.** The topic name (`pipeline.<id>.events`) does *not* encode the
-table name. The consumer pool resolves topic → `(tenant_id, database, table)` from
-`PipelineConfig`, looked up on cache miss and cached in memory — never by string surgery on
-the topic. This keeps the Kafka naming contract stable while the table naming scheme is free
-to change, and it must be a lookup, not a restart (§3.2).
-
-### 3.3.1 Dead-letter handling
-
-Owned by the consumer pool's write path. No exception may escape it. The reasoning and the
-rejected alternatives are in the decision memo's Proposal E; this is the contract.
-
-**Classify before you act.** Two errors reach the same `except` and get opposite treatment:
-
-| Class | What it is | Response |
-|---|---|---|
-| `parse` / `schema` | Our own validation failed before the insert — unparseable payload, missing declared column, type mismatch | Dead-letter the record, continue |
-| `insert` (data) | ClickHouse rejected the rows for a deterministic reason | Bisect the batch, dead-letter the offending rows, insert the rest |
-| `transient` | ClickHouse down, timeout, network, `TOO_MANY_PARTS`, memory limit | Retry with backoff. **Never dead-letter.** Do not commit |
-| `unclassified` | Anything not positively recognised | Treat as transient, retry the full budget, *then* dead-letter with `error_class='unclassified'` |
-
-The default matters more than the list: **an unrecognised error is transient until proven
-otherwise.** Treating unknown errors as poison is how a ClickHouse outage quietly drains a
-whole stream into the DLQ.
-
-Classification is by ClickHouse error code against an explicit allowlist of data errors —
-starting set to verify against the deployed server version in Phase 2: `6`, `16`, `26`,
-`27`, `38`, `41`, `43`, `47`, `53`, `69`, `70`, `72`, `117`, `349`. Everything else,
-including `60 UNKNOWN_TABLE` (a provisioning bug, not a bad record), is transient.
-
-Retry uses the existing `ClickHouseConnectionManager` backoff (base 1s, doubling, capped at
-60s, 6 attempts) — it is already in the repo and already correct; do not write a second one.
-When the budget is exhausted, **pause that topic's partitions only** (`consumer.pause()`) and
-leave the rest of the pool running. Offsets stay uncommitted, so nothing is lost; that
-pipeline goes visibly stale, which is the honest outcome.
-
-**Batch isolation.** One bad row fails the whole insert. On a data-class error, bisect the
-batch and recurse; below 10 rows, insert row by row. One poison record in 500 costs ~9 extra
-inserts. Row-by-row over the whole batch is rejected: 500 single-row inserts provokes
-`TOO_MANY_PARTS`, manufacturing an infrastructure failure out of a data one.
-
-**Write sequence, per topic-batch — the order is the contract:**
-
-1. Parse and validate rows; validation failures go to a dead-letter buffer, not an exception
-2. Insert the good rows into the pipeline's table (bisect on a data-class error)
-3. Insert the dead-letter buffer into `dead_letters`
-4. **Only then** commit offsets
-
-Steps 2 and 3 must both succeed before step 4. A failing dead-letter insert is itself a
-transient error, so it retries and the offsets stay put — at-least-once holds for dead
-letters too, not just for good records.
-
-```sql
-CREATE TABLE IF NOT EXISTS data_platform.dead_letters (
-    failed_at      DateTime64(3) DEFAULT now64(3),
-    tenant_id      LowCardinality(String),
-    pipeline_id    LowCardinality(String),
-    topic          LowCardinality(String),
-    partition      Int32,
-    offset         Int64,
-    target_table   String,
-    error_class    LowCardinality(String),  -- parse | schema | insert | unclassified
-    error_code     Int32,                   -- ClickHouse error code, 0 if not applicable
-    error_message  String,
-    payload        String                   -- raw record as received, for replay
-) ENGINE = MergeTree
-PARTITION BY toYYYYMM(failed_at)
-ORDER BY (tenant_id, pipeline_id, failed_at)
-TTL toDateTime(failed_at) + INTERVAL 30 DAY;
-```
-
-30-day TTL: the DLQ is a diagnosis and replay surface, not an archive. Replay is deliberate
-and manual — `SELECT payload FROM dead_letters WHERE pipeline_id = ...` re-produced to the
-topic after the schema or source is fixed. There is no automatic replayer, by design: it
-would re-feed the same poison into the same table on a loop.
-
-Dead-letter *rate* is a monitoring concern, not a control path — the pool emits
-`dlq_rows_total{pipeline_id, tenant_id, error_class}` and Phase 4 alerts on it. A sustained
-rate means the declared schema and the source disagree, which is a human decision.
-
 ### 3.4 Orchestration
 
 Kubernetes Deployments. `desired_state` ≡ replica count. A liveness probe on the producer
@@ -203,25 +95,31 @@ Three layers, not one:
 - **How stale** — OpenTelemetry tracing, source read → Kafka → ClickHouse insert. Lag alone
   is measured in messages, not seconds, and misses a stalled source that shows zero lag while
   data is an hour old.
-- **What the customer sees** — a per-tenant health API on our own surface, not Grafana, which
-  holds cross-tenant data that can never be shown to a tenant directly.
+- **What the customer sees** — a per-user health API on our own surface, not Grafana, which
+  holds data across every user's pipelines and can never be shown to one user directly.
 
 ---
 
 ## 4. Config contract
 
-- `PipelineConfig` must include an explicit table field — do not rely on a global
-  `CLICKHOUSE_TABLE` setting shared across pipelines.
-- `tenant_id` must be part of the schema from the start — as a column, not only as a table
-  name prefix. It is `user_<user_id>_collection_<collection_number>`, derived from
-  Stratahub's identifiers rather than minted here, and those identifiers must be immutable
-  numeric IDs (a renameable handle in a table name means orphaned tables). See the decision
-  memo's Proposal F.
-- A table-name prefix is a naming convention, **not** an isolation boundary. Nothing that
-  scopes a customer-facing answer — the Phase 4 per-tenant health API above all — may rely on
-  naming alone.
-- Kafka topic naming: `pipeline.<id>.events`, matched by the consumer pool's subscription
-  pattern `pipeline.*.events`.
+- `PipelineConfig` must include `user_id`, `collection_number`, and `table_name` — these are
+  not derived at insert time, they come from the pipeline's own config, exactly as normal
+  (batch) pipelines already do.
+- **ClickHouse table identity — `ch_unique_identifier`.** Every table, live or batch, is
+  named:
+
+  ```
+  user_<user_id>_collection_<collection_number>_<table_name>
+  ```
+
+  e.g. `user_1_collection_22_aveva_iot`. Live pipelines generate this identifier **using the
+  exact same logic normal pipelines already use** — do not reimplement it. If normal
+  pipelines call a shared naming function/module for this, live pipelines call the same one;
+  if no shared function exists yet, extracting one both paths call is the correct fix, not
+  writing a second implementation that can drift from the first.
+- Kafka topic naming (`pipeline.<id>.events`, matched by `pipeline.*.events`) is a separate,
+  internal identifier — it is **not** the ClickHouse table name. The consumer pool resolves
+  topic → `PipelineConfig` → `ch_unique_identifier` to know which table to write to.
 
 ---
 

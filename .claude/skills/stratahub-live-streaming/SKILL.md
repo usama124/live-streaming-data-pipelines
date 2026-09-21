@@ -43,8 +43,12 @@ worse, silently reversing) decisions that were already made for specific, docume
   Kubernetes move was to stop polling Redis for desired state.
 - **Never delete `DockerRuntime` / Compose support.** It stays behind `RuntimeAdapter`
   alongside `KubernetesRuntime` intentionally, for local dev.
-- **`tenant_id` must be part of any per-pipeline schema work.** It's a known gap — don't
-  make it worse by shipping more single-tenant-shaped code.
+- **There is no `tenant_id` field in this system — don't add one.** Ownership is expressed
+  through `user_id` + `collection_number`, folded into `ch_unique_identifier`:
+  `user_<user_id>_collection_<collection_number>_<table_name>` (e.g.
+  `user_1_collection_22_aveva_iot`). Live pipelines must generate this using the exact same
+  logic normal (batch) pipelines already use — find and call that shared function, don't
+  write a second implementation that can drift from it.
 
 ## Traps — things that look right but aren't
 
@@ -67,6 +71,11 @@ worse, silently reversing) decisions that were already made for specific, docume
   free."** It offers at-least-once delivery and no DLQ support as of the last evaluation.
   If someone proposes adopting Flink to solve either problem, that premise is wrong — check
   `DECISION-live-pipeline-simplification.md`'s Flink section before agreeing to it.
+- **Don't reimplement `ch_unique_identifier` generation for live pipelines.** Normal
+  (batch) pipelines already compute
+  `user_<user_id>_collection_<collection_number>_<table_name>` somewhere in the codebase.
+  Find that logic and call it from the live path too — writing a second version invites the
+  two paths to drift apart on edge cases (special characters, casing, id formatting).
 - **A pipeline can look "up" while its data is stale.** Consumer lag measured in messages
   can be zero while a source-side connection is hung, not dead. Health checks based on
   process liveness or Kafka lag alone will miss this — see `ARCHITECTURE.md` §3.5.

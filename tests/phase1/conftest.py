@@ -273,21 +273,9 @@ def consume(topic: str, count: int, timeout: float = 90.0) -> list[dict]:
 
 
 @pytest.fixture(scope="session")
-def consumer_image() -> str:
-    """Phase 2 replaces this with the shared pool, but DockerRuntime still starts
-    one consumer per pipeline, and a missing image fails the whole start."""
-    subprocess.run(
-        ["docker", "build", "-q", "-f", "services/consumer_service/Dockerfile",
-         "-t", "data-platform-consumer:latest", "."],
-        cwd=REPO, check=True, capture_output=True, text=True, timeout=1800,
-    )
-    return "data-platform-consumer:latest"
-
-
-@pytest.fixture(scope="session")
 def platform_stack(kafka):
     """The real API and controller, from the root compose file."""
-    _compose("up", "-d", "--wait", "task-manager", "controller")
+    _compose("up", "-d", "--wait", "clickhouse", "task-manager", "controller")
 
     deadline = time.time() + 120
     while time.time() < deadline:

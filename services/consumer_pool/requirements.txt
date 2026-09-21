@@ -1,4 +1,5 @@
-quixstreams==3.23.6
+aiokafka==0.12.0
 clickhouse-connect==0.8.14
 pydantic-settings==2.7.1
 redis==5.2.1
+prometheus-client==0.21.1

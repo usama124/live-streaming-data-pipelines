@@ -7,7 +7,7 @@ from typing import Any, Callable, TypeVar
 import clickhouse_connect
 from clickhouse_connect.driver.exceptions import ClickHouseError
 
-logger = logging.getLogger("consumer-service.clickhouse")
+logger = logging.getLogger("consumer-pool.clickhouse")
 
 T = TypeVar("T")
 

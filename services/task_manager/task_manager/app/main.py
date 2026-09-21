@@ -33,6 +33,7 @@ from redis.asyncio import Redis
 
 from task_manager.app.config import settings
 from task_manager.app.folder_watcher import folder_watcher_loop
+from task_manager.app.provisioning import provision
 from common.app_common.models import (
     DesiredState,
     PipelineConfig,
@@ -124,6 +125,10 @@ async def create_pipeline(
         airflow_dag_id=request.airflow_dag_id,
         source_type=request.source_type,
         topic=topic,
+        user_id=request.user_id or "0",
+        collection_number=request.collection_number or 1,
+        table_name=request.table_name or "events",
+        table_schema=request.table_schema,
         batch_size=request.batch_size,
         flush_interval_seconds=request.flush_interval_seconds,
         source_options=request.source_options,
@@ -132,7 +137,20 @@ async def create_pipeline(
         state = await repo.create_pipeline(config)
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
-    return {"config": config.model_dump(), "state": state.model_dump()}
+
+    # Topic and table before the producer can start, so the first event has
+    # somewhere to land instead of racing table creation.
+    if config.pipeline_type == PipelineType.LIVE:
+        try:
+            await provision(config)
+        except Exception as exc:
+            logger.exception("provisioning failed for %s", config.pipeline_id)
+            await repo.update_state(config.pipeline_id, status=PipelineStatus.FAILED,
+                                    last_error=f"provisioning failed: {exc}")
+            raise HTTPException(502, f"provisioning failed: {exc}") from exc
+
+    return {"config": config.model_dump(), "state": state.model_dump(),
+            "table": config.ch_unique_identifier}
 
 
 @app.get("/pipelines", tags=["pipelines"])

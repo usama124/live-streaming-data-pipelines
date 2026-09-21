@@ -88,7 +88,6 @@ services:
       - RUNTIME_MODE=docker
       - DOCKER_NETWORK=data-platform_backend
       - PRODUCER_IMAGE=data-platform-producer:latest
-      - CONSUMER_IMAGE=data-platform-consumer:latest
       - AIRFLOW_ENABLED=false
       - CLICKHOUSE_HOST=clickhouse
       - CLICKHOUSE_PORT=8123
@@ -141,7 +140,6 @@ services:
       - RUNTIME_MODE=docker
       - DOCKER_NETWORK=data-platform_backend
       - PRODUCER_IMAGE=data-platform-producer:latest
-      - CONSUMER_IMAGE=data-platform-consumer:latest
       - CLICKHOUSE_HOST=clickhouse
       - CLICKHOUSE_PORT=8123
       - CLICKHOUSE_USERNAME=default
@@ -155,6 +153,37 @@ services:
       redis:
         condition: service_healthy
       kafka:
+        condition: service_healthy
+    networks:
+      - backend
+    restart: unless-stopped
+
+  # ── Consumer pool — shared by every live pipeline ────────────────────────
+  # One deployment, pattern-subscribed to pipeline.*.events. A new pipeline's
+  # topic is picked up without restarting this; nothing registers with it.
+
+  consumer-pool:
+    build:
+      context: .
+      dockerfile: services/consumer_pool/Dockerfile
+    image: data-platform-consumer-pool:latest
+    container_name: consumer-pool
+    ports:
+      - "9100:9100"
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - CLICKHOUSE_HOST=clickhouse
+      - CLICKHOUSE_PORT=8123
+      - CLICKHOUSE_USERNAME=default
+      - CLICKHOUSE_PASSWORD=
+      - CLICKHOUSE_DATABASE=data_platform
+    depends_on:
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      clickhouse:
         condition: service_healthy
     networks:
       - backend
@@ -190,17 +219,6 @@ services:
     profiles:
       - templates
     command: ["python", "-c", "print('producer image build target only')"]
-    networks:
-      - backend
-
-  consumer-template:
-    build:
-      context: .
-      dockerfile: services/consumer_service/Dockerfile
-    image: data-platform-consumer:latest
-    profiles:
-      - templates
-    command: ["python", "-c", "print('consumer image build target only')"]
     networks:
       - backend
 

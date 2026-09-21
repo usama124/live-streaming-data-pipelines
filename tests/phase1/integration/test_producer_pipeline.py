@@ -86,7 +86,7 @@ def _container_exists(name: str) -> bool:
         return False
 
 
-@pytest.mark.usefixtures("producer_image", "consumer_image", "platform_stack")
+@pytest.mark.usefixtures("producer_image", "platform_stack")
 def test_i2_values_on_kafka_match_the_source(kafka) -> None:
     """I2 — end to end through the real API, checking the values, not just that
     'some message' arrived."""
@@ -114,7 +114,7 @@ def test_i2_values_on_kafka_match_the_source(kafka) -> None:
     assert checked >= 10, f"only {checked} numeric readings verified against the source"
 
 
-@pytest.mark.usefixtures("producer_image", "consumer_image", "platform_stack")
+@pytest.mark.usefixtures("producer_image", "platform_stack")
 def test_i3_concurrent_pipelines_keep_their_topics_separate(kafka) -> None:
     """I3 — two pipelines, two sources, running at the same time."""
     id_a, id_b = unique_id("i3a"), unique_id("i3b")
@@ -136,7 +136,7 @@ def test_i3_concurrent_pipelines_keep_their_topics_separate(kafka) -> None:
     assert {m["tags"]["pipeline_id"] for m in messages_b} == {id_b}
 
 
-@pytest.mark.usefixtures("producer_image", "consumer_image", "platform_stack")
+@pytest.mark.usefixtures("producer_image", "platform_stack")
 def test_i4_full_lifecycle_tears_the_producer_down(kafka) -> None:
     """I4 — create, sustained flow, stop, and the container is actually gone."""
     pipeline_id = unique_id("i4")
