@@ -73,8 +73,9 @@ def _tail(log, lines: int = 20) -> str:
 class MockServer:
     """A real OPC UA server in a subprocess."""
 
-    def __init__(self) -> None:
+    def __init__(self, freeze_after_s: float = 0.0) -> None:
         self.port = free_port()
+        self.freeze_after_s = freeze_after_s
         self.endpoint = f"opc.tcp://127.0.0.1:{self.port}/stratahub/server/"
         self._proc: subprocess.Popen | None = None
         self._log = None
@@ -88,7 +89,9 @@ class MockServer:
             [sys.executable, "-m", "connectors.opcua.mock_server"],
             cwd=REPO,
             env={"PATH": "/usr/bin:/bin", "OPCUA_SERVER_PORT": str(self.port),
-                 "OPCUA_SERVER_HOST": "127.0.0.1"},
+                 "OPCUA_SERVER_HOST": "127.0.0.1",
+                 "OPCUA_STATUS_EVERY": "2",
+                 "OPCUA_FREEZE_AFTER_S": str(self.freeze_after_s)},
             stdout=self._log,
             stderr=subprocess.STDOUT,
         )

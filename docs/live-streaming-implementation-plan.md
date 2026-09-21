@@ -270,49 +270,53 @@ normal at-least-once behavior. The Phase 2 integration suite passes.
 
 Goal: Kubernetes Deployments replace Controller + Watchdog + Leader Lock.
 
-- [ ] Implement `KubernetesRuntime` behind the existing `RuntimeAdapter` interface
+- [x] Implement `KubernetesRuntime` behind the existing `RuntimeAdapter` interface
       (`common/app_common/runtime/base.py`) — same 5 methods as `DockerRuntime`:
       `start_live_pipeline`, `stop_live_pipeline`, `restart_live_pipeline`, `get_logs`,
       `is_running`
-- [ ] Build out the `k8s/` Deployment templates (they exist but are currently unused) for
+- [x] Build out the `k8s/` Deployment templates (they exist but are currently unused) for
       the producer pod (1 per pipeline) and the consumer pool (shared, few replicas)
-- [ ] Map lifecycle semantics: `desired_state=running` → `replicas: 1`; `desired_state=stopped`
+- [x] Map lifecycle semantics: `desired_state=running` → `replicas: 1`; `desired_state=stopped`
       → `replicas: 0`; no separate reconcile loop needed, `kube-controller-manager` owns it
-- [ ] Add a liveness probe: an HTTP endpoint on the producer pod that fails when the last
+- [x] Add a liveness probe: an HTTP endpoint on the producer pod that fails when the last
       successful source read exceeds a threshold, so kubelet recycles a hung-but-alive pod.
       This is the backstop for Phase 1's known Telegraf reconnect gap — **do not skip it**
-- [ ] Define the staleness threshold per source type (OPC UA now; leave room for AVEVA/Modbus
-      tuning later) — this needs a number, not just the mechanism
-- [ ] Update `task_manager` so a failed start returns an error to the API caller directly,
+- [x] Define the staleness threshold per source type (OPC UA now; leave room for AVEVA/Modbus
+      tuning later) — this needs a number, not just the mechanism — **60s for OPC UA**
+      (`STALENESS_THRESHOLD_S` in `kubernetes_runtime.py`), overridable per pipeline via
+      `source_options["staleness_threshold_s"]`. OPC UA publishes on *change*, so this is
+      not a read interval: too low a number restarts pipelines whose sensors are legitimately
+      static. 60s still wants confirming against a real plant — see `BACKLOG.md`
+- [x] Update `task_manager` so a failed start returns an error to the API caller directly,
       instead of surfacing on the next 3s controller tick
-- [ ] Switch `task_manager`'s runtime selection to `KubernetesRuntime` by default, with
+- [x] Switch `task_manager`'s runtime selection to `KubernetesRuntime` by default, with
       `DockerRuntime` kept selectable for Compose-based local dev
 - [ ] Once proven in staging: delete `controller.py`, `watchdog.py`, and the leader lock
       module; stop writing `desired_state` to Redis as a control signal
 
 **Unit/scenario tests (`tests/phase3/unit/`):**
-- [ ] Start pipeline via API → Deployment created with `replicas: 1`
-- [ ] Stop pipeline via API → Deployment scaled to `replicas: 0`
-- [ ] Restart via API → pod recreated correctly, pipeline resumes producing data
-- [ ] Producer pod crash → Kubernetes restarts it automatically (`restartPolicy: Always`)
+- [x] Start pipeline via API → Deployment created with `replicas: 1`
+- [x] Stop pipeline via API → Deployment scaled to `replicas: 0`
+- [x] Restart via API → pod recreated correctly, pipeline resumes producing data
+- [x] Producer pod crash → Kubernetes restarts it automatically (`restartPolicy: Always`)
       with no manual intervention
-- [ ] **This is the closing test for Phase 1's known gap:** simulate a hung-but-alive
+- [x] **This is the closing test for Phase 1's known gap:** simulate a hung-but-alive
       connector (process running, last successful read older than the configured threshold)
       → liveness probe fails → kubelet recycles the pod. Flip Phase 1's marked xfail test to
       passing once this lands
-- [ ] A failed start returns a synchronous error to the API caller — verify the actual
+- [x] A failed start returns a synchronous error to the API caller — verify the actual
       response, not just that "something" eventually shows up in logs
 
 **Integration suite (`tests/phase3/integration/`):**
-- [ ] Full pipeline lifecycle through the real API, backed by `KubernetesRuntime`, against a
+- [x] Full pipeline lifecycle through the real API, backed by `KubernetesRuntime`, against a
       real cluster (or kind/minikube): create → data flows correctly end-to-end → stop →
       confirm resources are actually cleaned up, not just marked stopped
-- [ ] Chaos test: kill a producer pod and a consumer pool pod during active data flow —
+- [x] Chaos test: kill a producer pod and a consumer pool pod during active data flow —
       verify Kubernetes self-heals both and the pipeline resumes correctly with no manual
       intervention
-- [ ] End-to-end liveness-probe test: induce a real hung-source condition (not a unit-level
+- [x] End-to-end liveness-probe test: induce a real hung-source condition (not a unit-level
       simulation) and verify the full loop — probe fails → pod recycled → data resumes
-- [ ] **Regression run:** re-run the entire Phase 2 integration suite against
+- [x] **Regression run:** re-run the entire Phase 2 integration suite against
       `KubernetesRuntime` instead of `DockerRuntime`, confirming parity between the two
       runtimes rather than assuming it
 - [ ] **Manual/staging verification, not CI:** simulate node failure (cordon/drain or kill a
@@ -433,7 +437,7 @@ tests are written and passing — don't let this drift from the actual suite. Va
 | 4 | Connector subprocess crash → Telegraf restarts it | 1 | Passing |
 | 5 | Connector fails to connect → fails clearly, doesn't hang or crash Telegraf | 1 | Passing |
 | 6 | Pipeline creation generates a correct Telegraf config | 1 | Passing |
-| 7 | Silent hang is NOT caught by Telegraf alone (known-gap marker) | 1 | Written, failing (strict xfail — #19 closes it) |
+| 7 | Silent hang is NOT caught by Telegraf alone (known-gap marker) | 1 | Closed under Kubernetes by #19/I11. Stays a strict xfail for the Compose path, which has no probe to fail |
 | 8 | New pipeline's topic picked up with no pool restart | 2 | Passing |
 | 9 | Two differently-shaped pipelines land in separate correct tables (schema-collision regression) | 2 | Passing |
 | 10 | Crash between insert and commit → re-processed, not dropped | 2 | Passing |
@@ -441,12 +445,12 @@ tests are written and passing — don't let this drift from the actual suite. Va
 | 12 | Consumer pool restart resumes from last committed offset | 2 | Passing |
 | 13 | Topic-to-table mapping correctness under load | 2 | Passing |
 | 14 | Batch flush triggers at configured thresholds | 2 | Passing |
-| 15 | Start via API → correct replica count | 3 | Not written |
-| 16 | Stop via API → scaled to zero | 3 | Not written |
-| 17 | Restart via API → pod recreated, pipeline resumes | 3 | Not written |
-| 18 | Producer pod crash → automatic Kubernetes restart | 3 | Not written |
-| 19 | Hung-but-alive connector → liveness probe recycles pod (closes #7) | 3 | Not written |
-| 20 | Failed start returns synchronous API error | 3 | Not written |
+| 15 | Start via API → correct replica count | 3 | Passing |
+| 16 | Stop via API → scaled to zero | 3 | Passing |
+| 17 | Restart via API → pod recreated, pipeline resumes | 3 | Passing |
+| 18 | Producer pod crash → automatic Kubernetes restart | 3 | Passing |
+| 19 | Hung-but-alive connector → liveness probe recycles pod (closes #7) | 3 | Passing |
+| 20 | Failed start returns synchronous API error | 3 | Passing |
 | 21 | Kafka UI reports correct lag/throughput | 4 | Not written |
 | 22 | Prometheus scrapes all expected targets successfully | 4 | Not written |
 | 23 | OTel trace reconstructable end-to-end for a single record | 4 | Not written |
@@ -465,11 +469,11 @@ tests are written and passing — don't let this drift from the actual suite. Va
 | I6 | Concurrent multi-pipeline soak run, varying schemas, sustained period | 2 | Passing |
 | I7 | Fault injection: kill consumer pool mid-stream under multi-pipeline load, verify full recovery | 2 | Passing |
 | I8 | New pipeline created while pool is under existing load, no degradation | 2 | Passing |
-| I9 | Full lifecycle via real API on `KubernetesRuntime` against a real/kind cluster | 3 | Not written |
-| I10 | Chaos test: kill producer pod + consumer pool pod during active flow, verify self-heal | 3 | Not written |
-| I11 | End-to-end liveness-probe loop: real hung source → probe fails → pod recycled → data resumes | 3 | Not written |
-| I12 | Phase 2 integration suite re-run against `KubernetesRuntime` (runtime parity regression) | 3 | Not written |
-| I13 | Node-failure reschedule (manual/staging only, not CI) | 3 | Not written |
+| I9 | Full lifecycle via real API on `KubernetesRuntime` against a real/kind cluster | 3 | Passing |
+| I10 | Chaos test: kill producer pod + consumer pool pod during active flow, verify self-heal | 3 | Passing |
+| I11 | End-to-end liveness-probe loop: real hung source → probe fails → pod recycled → data resumes | 3 | Passing |
+| I12 | Phase 2 integration suite re-run against `KubernetesRuntime` (runtime parity regression) | 3 | Passing |
+| I13 | Node-failure reschedule (manual/staging only, not CI) | 3 | **Not run** — needs a multi-node staging cluster |
 | I14 | Multi-pipeline run with monitoring: dashboard/trace numbers cross-checked against known traffic | 4 | Not written |
 | I15 | Real stalled-but-connected source during integration run, surfaced as stale end-to-end | 4 | Not written |
 | I16 | Multi-user concurrent integration run, per-user API scoping verified under load | 4 | Not written |

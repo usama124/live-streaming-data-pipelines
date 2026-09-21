@@ -1,0 +1,133 @@
+# Single-replica Redis, Kafka and ClickHouse for a local kind cluster.
+#
+# Dev and CI only — production points at managed instances. This exists so the
+# Phase 3 integration suite runs entirely in-cluster: a producer pod reaching a
+# broker on the developer's host would be testing the host's networking, not the
+# system.
+---
+apiVersion: v1
+kind: Service
+metadata: {name: redis}
+spec:
+  selector: {app: redis}
+  ports: [{port: 6379, targetPort: 6379}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: redis}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: redis}}
+  template:
+    metadata: {labels: {app: redis}}
+    spec:
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          ports: [{containerPort: 6379}]
+          readinessProbe:
+            exec: {command: ["redis-cli", "ping"]}
+            periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata: {name: kafka}
+spec:
+  selector: {app: kafka}
+  ports: [{port: 9092, targetPort: 9092}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: kafka}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: kafka}}
+  template:
+    metadata: {labels: {app: kafka}}
+    spec:
+      containers:
+        - name: kafka
+          image: apache/kafka:3.9.1
+          ports: [{containerPort: 9092}]
+          env:
+            - {name: KAFKA_NODE_ID, value: "0"}
+            - {name: KAFKA_PROCESS_ROLES, value: "controller,broker"}
+            - {name: KAFKA_CONTROLLER_QUORUM_VOTERS, value: "0@localhost:9093"}
+            - {name: KAFKA_LISTENERS, value: "PLAINTEXT://:9092,CONTROLLER://:9093"}
+            - {name: KAFKA_ADVERTISED_LISTENERS, value: "PLAINTEXT://kafka:9092"}
+            - {name: KAFKA_LISTENER_SECURITY_PROTOCOL_MAP, value: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT"}
+            - {name: KAFKA_CONTROLLER_LISTENER_NAMES, value: "CONTROLLER"}
+            - {name: KAFKA_INTER_BROKER_LISTENER_NAME, value: "PLAINTEXT"}
+            - {name: KAFKA_AUTO_CREATE_TOPICS_ENABLE, value: "true"}
+            - {name: KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR, value: "1"}
+            - {name: KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR, value: "1"}
+            - {name: KAFKA_TRANSACTION_STATE_LOG_MIN_ISR, value: "1"}
+            - {name: KAFKA_LOG_DIRS, value: "/var/lib/kafka/data"}
+          # tcpSocket, not kafka-topics.sh: the JVM tool takes longer to start
+          # than any sane probe timeout, so an exec probe reports a healthy
+          # broker as unready forever.
+          readinessProbe:
+            tcpSocket: {port: 9092}
+            initialDelaySeconds: 20
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata: {name: clickhouse}
+spec:
+  selector: {app: clickhouse}
+  ports: [{port: 8123, targetPort: 8123}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: clickhouse}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: clickhouse}}
+  template:
+    metadata: {labels: {app: clickhouse}}
+    spec:
+      containers:
+        - name: clickhouse
+          image: clickhouse/clickhouse-server:24.8
+          ports: [{containerPort: 8123}]
+          env:
+            # Same set the Compose stack passes. With only CLICKHOUSE_DB set,
+            # the image leaves the default user unusable and every client gets
+            # AUTHENTICATION_FAILED.
+            - {name: CLICKHOUSE_DB, value: data_platform}
+            - {name: CLICKHOUSE_USER, value: default}
+            - {name: CLICKHOUSE_PASSWORD, value: ""}
+            - {name: CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT, value: "1"}
+          readinessProbe:
+            httpGet: {path: /ping, port: 8123}
+            initialDelaySeconds: 10
+            periodSeconds: 5
+---
+# The mock OPC UA source, in-cluster so producer pods have something to read.
+apiVersion: v1
+kind: Service
+metadata: {name: opcua-mock}
+spec:
+  selector: {app: opcua-mock}
+  ports: [{port: 4840, targetPort: 4840}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: opcua-mock}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: opcua-mock}}
+  template:
+    metadata: {labels: {app: opcua-mock}}
+    spec:
+      containers:
+        - name: opcua-mock
+          image: data-platform-producer:latest
+          imagePullPolicy: IfNotPresent
+          command: ["python3", "-m", "connectors.opcua.mock_server"]
+          workingDir: /opt
+          env:
+            - {name: PYTHONPATH, value: /opt}
+            - {name: OPCUA_STATUS_EVERY, value: "2"}
+          ports: [{containerPort: 4840}]

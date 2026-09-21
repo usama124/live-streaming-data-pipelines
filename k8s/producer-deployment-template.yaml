@@ -1,3 +1,13 @@
+# Per-pipeline producer: Telegraf + our connector. One Deployment per pipeline.
+#
+# desired_state maps straight to replicas — running is 1, stopped is 0 — so
+# kube-controller-manager does the reconciling that the Controller and Watchdog
+# used to do by polling Redis.
+#
+# Rendered by common/app_common/runtime/kubernetes_runtime.py. The Telegraf
+# config itself is not templated in here; it arrives as a ConfigMap, because a
+# multi-line TOML document substituted into YAML is a quoting accident waiting
+# to happen.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -5,8 +15,9 @@ metadata:
   labels:
     app: producer
     pipeline-id: ${PIPELINE_ID}
+    managed-by: task-manager
 spec:
-  replicas: 1
+  replicas: ${REPLICAS}
   selector:
     matchLabels:
       app: producer
@@ -17,23 +28,47 @@ spec:
         app: producer
         pipeline-id: ${PIPELINE_ID}
     spec:
+      # Restart-on-crash, which is what the Watchdog used to provide.
+      restartPolicy: Always
+      # Kubernetes injects legacy Docker-link env vars for every Service in the
+      # namespace — a Service named `clickhouse` sets CLICKHOUSE_PORT to
+      # "tcp://10.96.x.x:8123", which clobbers our own CLICKHOUSE_PORT and
+      # crashes config parsing. We address services by DNS name, so none of
+      # those vars are wanted.
+      enableServiceLinks: false
+      volumes:
+        - name: telegraf-config
+          configMap:
+            name: producer-${PIPELINE_ID}
       containers:
         - name: producer
-          image: data-platform-producer:latest
+          image: ${PRODUCER_IMAGE}
+          imagePullPolicy: ${IMAGE_PULL_POLICY}
+          volumeMounts:
+            - name: telegraf-config
+              mountPath: /etc/telegraf/telegraf.conf
+              subPath: telegraf.conf
           env:
-            - name: PIPELINE_ID
-              value: ${PIPELINE_ID}
-            - name: SOURCE_TYPE
-              value: mock
-            - name: REDIS_URL
-              valueFrom:
-                secretKeyRef:
-                  name: data-platform-secrets
-                  key: redis-url
-            - name: KAFKA_BOOTSTRAP_SERVERS
-              value: kafka:9092
-            - name: KAFKA_TOPIC
-              value: pipeline.${PIPELINE_ID}.events
+            - name: HEALTH_PORT
+              value: "${HEALTH_PORT}"
+            - name: OPCUA_STALENESS_THRESHOLD_S
+              value: "${STALENESS_THRESHOLD_S}"
+          ports:
+            - name: health
+              containerPort: ${HEALTH_PORT}
+          # The backstop for Telegraf's known gap: Telegraf restarts a connector
+          # that exits, but cannot see one that is alive and receiving nothing.
+          # /healthz fails once no data has arrived for the threshold, and
+          # kubelet recycles the pod. Do not remove this without removing the
+          # gap it covers.
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: ${PROBE_INITIAL_DELAY_S}
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
           resources:
             requests:
               cpu: "100m"

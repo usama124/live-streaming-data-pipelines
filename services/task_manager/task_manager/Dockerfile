@@ -11,6 +11,8 @@ RUN pip install --no-cache-dir -r /tmp/req.txt
 COPY services/task_manager/common /app/common
 COPY services/task_manager/task_manager /app/task_manager
 COPY telegraf/templates /opt/telegraf/templates
+# KubernetesRuntime renders the producer Deployment from these.
+COPY k8s /opt/k8s
 
 EXPOSE 8000
 CMD ["uvicorn", "task_manager.app.main:app", "--host", "0.0.0.0", "--port", "8000"]

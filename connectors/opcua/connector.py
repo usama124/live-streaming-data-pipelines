@@ -21,6 +21,10 @@ Config, all from the environment:
     OPCUA_CONNECT_TIMEOUT_S       handshake/request timeout (default 4). Raise it
                                   for a slow industrial link — a server that
                                   accepts TCP but answers slowly is common.
+    HEALTH_PORT                   serve /healthz on this port (unset = off)
+    OPCUA_STALENESS_THRESHOLD_S   /healthz fails after this long with no data
+                                  (default 60). See the note on static sensors
+                                  in docs/ARCHITECTURE.md §3.4.
 """
 
 from __future__ import annotations
@@ -30,12 +34,66 @@ import json
 import logging
 import os
 import sys
+import threading
+import time
 from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any
 
 from asyncua import Client, Node
 
 logger = logging.getLogger("opcua-connector")
+
+
+class _LastRead:
+    """When the source last gave us data. Read by the health endpoint.
+
+    Deliberately *not* updated by connection checks: a hung source still answers
+    a status read, so a probe driven by connection liveness would call a stalled
+    pipeline healthy — which is the exact gap this exists to close.
+    """
+
+    def __init__(self) -> None:
+        self._at = time.monotonic()
+        self._lock = threading.Lock()
+
+    def touch(self) -> None:
+        with self._lock:
+            self._at = time.monotonic()
+
+    def age_s(self) -> float:
+        with self._lock:
+            return time.monotonic() - self._at
+
+
+def serve_health(port: int, last_read: _LastRead, threshold_s: float) -> None:
+    """503 once data has not arrived for `threshold_s`, so kubelet recycles us.
+
+    The connector does not exit on staleness: whether a stalled pod is restarted
+    is the orchestrator's decision, and Compose-based local dev has no probe.
+    """
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802
+            age = last_read.age_s()
+            healthy = age <= threshold_s
+            body = json.dumps({
+                "status": "ok" if healthy else "stale",
+                "seconds_since_last_read": round(age, 1),
+                "threshold_seconds": threshold_s,
+            }).encode()
+            self.send_response(200 if healthy else 503)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_: Any) -> None:
+            pass  # kubelet probes every few seconds; do not narrate it
+
+    server = HTTPServer(("0.0.0.0", port), Handler)  # noqa: S104
+    threading.Thread(target=server.serve_forever, daemon=True, name="health").start()
+    logger.info("health endpoint on :%d (staleness threshold %.0fs)", port, threshold_s)
 
 
 class _Emitter:
@@ -47,10 +105,12 @@ class _Emitter:
     on overflow — silent data loss is worse than back-pressure.
     """
 
-    def __init__(self, pipeline_id: str, node_names: dict[str, str], out: Any) -> None:
+    def __init__(self, pipeline_id: str, node_names: dict[str, str], out: Any,
+                 last_read: "_LastRead | None" = None) -> None:
         self._pipeline_id = pipeline_id
         self._node_names = node_names
         self._out = out
+        self._last_read = last_read
         self._sequence = 0
 
     def datachange_notification(self, node: Node, val: Any, data: Any) -> None:
@@ -77,6 +137,8 @@ class _Emitter:
                 ),
             }
             print(json.dumps(record), file=self._out, flush=True)
+            if self._last_read is not None:
+                self._last_read.touch()
         except Exception:
             # Never let a bad notification kill the subscription — one unreadable
             # node must not stop the other four.
@@ -104,6 +166,8 @@ def _config() -> dict[str, Any]:
         "publishing_interval_ms": int(os.getenv("OPCUA_PUBLISHING_INTERVAL_MS", "500")),
         "connection_check_s": float(os.getenv("OPCUA_CONNECTION_CHECK_S", "5")),
         "connect_timeout_s": float(os.getenv("OPCUA_CONNECT_TIMEOUT_S", "4")),
+        "health_port": int(os.getenv("HEALTH_PORT", "0")),
+        "staleness_threshold_s": float(os.getenv("OPCUA_STALENESS_THRESHOLD_S", "60")),
     }
 
 
@@ -115,7 +179,11 @@ async def run(cfg: dict[str, Any]) -> None:
     logger.info("connected to %s", cfg["endpoint"])
 
     try:
-        emitter = _Emitter(cfg["pipeline_id"], cfg["node_names"], sys.stdout)
+        last_read = _LastRead()
+        if cfg["health_port"]:
+            serve_health(cfg["health_port"], last_read, cfg["staleness_threshold_s"])
+
+        emitter = _Emitter(cfg["pipeline_id"], cfg["node_names"], sys.stdout, last_read)
         subscription = await client.create_subscription(
             period=cfg["publishing_interval_ms"], handler=emitter
         )

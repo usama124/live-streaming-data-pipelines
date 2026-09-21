@@ -120,6 +120,29 @@ so kubelet recycles a hung-but-alive pod — this is the backstop for §3.1's Te
 A failed start returns an error to the API caller directly, rather than surfacing on a later
 poll — there is no poll; there is no controller loop to poll on.
 
+As built (Phase 3): `KubernetesRuntimeAdapter`, the manifests in `k8s/`, and a per-pipeline
+ConfigMap holding the rendered Telegraf config — a multi-line TOML document substituted into
+YAML is a quoting accident waiting to happen. Stop scales to 0 rather than deleting, so a
+stopped pipeline is still a pipeline. `k8s/dev/` runs the whole system inside kind for tests.
+
+**Staleness threshold: 60s for OPC UA**, overridable per pipeline through
+`source_options["staleness_threshold_s"]`. This is *not* a read interval. OPC UA publishes on
+change, so a genuinely static sensor sends nothing and too low a number restarts healthy
+pipelines in a loop; too high and a dead session goes unnoticed. The probe's
+`initialDelaySeconds` is deliberately larger than the threshold, or a slow source is killed
+before it ever connects. The number still wants confirming against a real plant — see
+`BACKLOG.md`.
+
+**Trap — `enableServiceLinks`.** Kubernetes injects legacy Docker-link environment variables
+for every Service in the namespace, so a Service named `clickhouse` sets `CLICKHOUSE_PORT` to
+`tcp://10.96.x.x:8123` and clobbers the application's own setting. Every pod spec here sets
+`enableServiceLinks: false`; we address services by DNS name and want none of those vars.
+This bites in any namespace, not just kind.
+
+**The Compose path has no probe.** `DockerRuntime` stays supported for local dev, but nothing
+there fails a health check and recycles a stalled producer, so §3.1's gap is closed under
+Kubernetes only. Registry #7 stays a deliberate xfail for exactly that reason.
+
 ### 3.5 Monitoring
 
 Three layers, not one:

@@ -77,6 +77,11 @@ worse, silently reversing) decisions that were already made for specific, docume
   path has its own (`ch_naming.py`) by decision. What binds them is the format, guarded by
   `tests/phase2/unit/test_ch_naming.py` — and note batch does **no** case folding and passes
   a UUID user id on some paths, so don't "tidy" either behaviour here.
+- **Kubernetes clobbers your config with Service env vars.** A Service named `clickhouse`
+  makes kubelet set `CLICKHOUSE_PORT=tcp://10.96.x.x:8123` in every pod in the namespace,
+  which overrides the app's own `CLICKHOUSE_PORT` and crashes config parsing. Every pod spec
+  sets `enableServiceLinks: false`. Don't drop it, and expect the same class of collision for
+  any setting named after a Service.
 - **A pipeline can look "up" while its data is stale.** Consumer lag measured in messages
   can be zero while a source-side connection is hung, not dead. Health checks based on
   process liveness or Kafka lag alone will miss this — see `ARCHITECTURE.md` §3.5.

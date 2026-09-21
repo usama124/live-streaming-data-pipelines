@@ -1,0 +1,95 @@
+# task_manager running in-cluster, so KubernetesRuntime uses in-cluster config
+# and a real ServiceAccount rather than a developer's kubeconfig.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: task-manager}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: task-manager}
+rules:
+  # Exactly what the runtime adapter's five methods need — nothing wider.
+  - apiGroups: ["apps"]
+    resources: ["deployments", "deployments/scale"]
+    verbs: ["get", "list", "create", "patch", "update", "delete"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "create", "patch", "update", "delete"]
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: task-manager}
+subjects: [{kind: ServiceAccount, name: task-manager}]
+roleRef: {kind: Role, name: task-manager, apiGroup: rbac.authorization.k8s.io}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: task-manager}
+spec:
+  selector: {app: task-manager}
+  ports: [{port: 8000, targetPort: 8000}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: task-manager}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: task-manager}}
+  template:
+    metadata: {labels: {app: task-manager}}
+    spec:
+      serviceAccountName: task-manager
+      # Kubernetes injects legacy Docker-link env vars for every Service in the
+      # namespace — a Service named `clickhouse` sets CLICKHOUSE_PORT to
+      # "tcp://10.96.x.x:8123", which clobbers our own CLICKHOUSE_PORT and
+      # crashes config parsing. We address services by DNS name, so none of
+      # those vars are wanted.
+      enableServiceLinks: false
+      containers:
+        - name: task-manager
+          image: data-platform-task-manager:latest
+          imagePullPolicy: IfNotPresent
+          ports: [{containerPort: 8000}]
+          env:
+            - {name: RUNTIME_MODE, value: kubernetes}
+            - {name: K8S_NAMESPACE, value: default}
+            - {name: REDIS_URL, value: "redis://redis:6379/0"}
+            - {name: KAFKA_BOOTSTRAP_SERVERS, value: "kafka:9092"}
+            - {name: CLICKHOUSE_HOST, value: clickhouse}
+            - {name: CLICKHOUSE_DATABASE, value: data_platform}
+            - {name: PRODUCER_IMAGE, value: "data-platform-producer:latest"}
+            - {name: WATCHER_ENABLED, value: "false"}
+          readinessProbe:
+            httpGet: {path: /health, port: 8000}
+            initialDelaySeconds: 5
+            periodSeconds: 5
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: consumer-pool}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: consumer-pool}}
+  template:
+    metadata: {labels: {app: consumer-pool}}
+    spec:
+      # Kubernetes injects legacy Docker-link env vars for every Service in the
+      # namespace — a Service named `clickhouse` sets CLICKHOUSE_PORT to
+      # "tcp://10.96.x.x:8123", which clobbers our own CLICKHOUSE_PORT and
+      # crashes config parsing. We address services by DNS name, so none of
+      # those vars are wanted.
+      enableServiceLinks: false
+      containers:
+        - name: consumer-pool
+          image: data-platform-consumer-pool:latest
+          imagePullPolicy: IfNotPresent
+          ports: [{containerPort: 9100}]
+          env:
+            - {name: REDIS_URL, value: "redis://redis:6379/0"}
+            - {name: KAFKA_BOOTSTRAP_SERVERS, value: "kafka:9092"}
+            - {name: CLICKHOUSE_HOST, value: clickhouse}
+            - {name: CLICKHOUSE_DATABASE, value: data_platform}

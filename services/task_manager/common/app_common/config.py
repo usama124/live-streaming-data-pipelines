@@ -31,9 +31,13 @@ class Settings(BaseSettings):
     kafka_bootstrap_servers: str = "172.17.0.1:9092"
 
     # ── Runtime ───────────────────────────────────────────────────────────
-    # "docker"     → DockerRuntimeAdapter  (local dev / CI)
-    # "redis_only" → RedisOnlyAdapter      (unit tests, no Docker)
-    runtime_mode:  str = "docker"
+    # "kubernetes" → KubernetesRuntimeAdapter (default; staging and production)
+    # "docker"     → DockerRuntimeAdapter     (Compose-based local dev / CI)
+    # "redis_only" → RedisOnlyAdapter         (unit tests, no runtime at all)
+    runtime_mode:  str = "kubernetes"
+    k8s_namespace:     str = "default"
+    kube_context:      str | None = None   # None = in-cluster, or the current context
+    image_pull_policy: str = "IfNotPresent"
     docker_network: str = "data-platform_backend"
     producer_image: str = "data-platform-producer:latest"
 

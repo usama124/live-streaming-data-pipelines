@@ -75,11 +75,13 @@ def test_telegraf_restarts_the_connector_after_it_exits(kafka) -> None:
 
 @pytest.mark.xfail(
     strict=True,
-    reason="KNOWN GAP (registry #7): Telegraf restarts a subprocess only when it "
-           "exits. A connected-but-stalled source leaves the connector alive and "
-           "silent, and nothing here notices. Closed by Phase 3's liveness probe "
-           "(registry #19) — when this starts passing, remove the marker rather "
-           "than the test.",
+    reason="KNOWN GAP (registry #7), still real under DockerRuntime. Telegraf "
+           "restarts a subprocess only when it exits; a connected-but-stalled "
+           "source leaves the connector alive and silent. Phase 3 closed this "
+           "for the production runtime — the connector now serves /healthz and "
+           "kubelet recycles the pod (registry #19, verified end to end by I11) "
+           "— but Compose has no probe to fail, so this stays xfail here. It is "
+           "the honest status of the Compose path, not an unfinished Phase 3.",
 )
 @pytest.mark.usefixtures("producer_image")
 def test_stalled_source_is_detected(kafka) -> None:

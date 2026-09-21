@@ -43,6 +43,7 @@ from common.app_common.models import (
 )
 from common.app_common.redis_repo import PipelineRedisRepository
 from common.app_common.runtime.docker_runtime import DockerRuntimeAdapter, RedisOnlyAdapter
+from common.app_common.runtime.kubernetes_runtime import KubernetesRuntimeAdapter
 from common.app_common.runtime.base import RuntimeAdapter
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -53,6 +54,10 @@ _bg_tasks: list[asyncio.Task] = []  # type: ignore[type-arg]
 
 
 def _get_runtime() -> RuntimeAdapter:
+    if settings.runtime_mode == "kubernetes":
+        return KubernetesRuntimeAdapter(
+            settings, namespace=settings.k8s_namespace, kube_context=settings.kube_context
+        )
     if settings.runtime_mode == "docker":
         return DockerRuntimeAdapter(settings)
     return RedisOnlyAdapter()
@@ -183,7 +188,7 @@ async def start_pipeline(
     pipeline_id: str,
     repo: PipelineRedisRepository = Depends(_repo),
 ) -> dict[str, Any]:
-    """Set desired_state=running. Controller picks it up and starts containers."""
+    """Start the pipeline and report the outcome now, not on a later poll."""
     config = await repo.get_config(pipeline_id)
     if config is None:
         raise HTTPException(404, "Pipeline not found")
@@ -192,9 +197,22 @@ async def start_pipeline(
     state = await repo.get_state(pipeline_id)
     if state and state.desired_state == DesiredState.RUNNING:
         return {"message": "Already running", "state": state.model_dump()}
-    state = await repo.update_state(pipeline_id, desired_state=DesiredState.RUNNING, last_error="")
+
+    state = await repo.update_state(pipeline_id, desired_state=DesiredState.RUNNING,
+                                    status=PipelineStatus.STARTING, last_error="")
+    try:
+        producer, _ = await _get_runtime().start_live_pipeline(config, state)
+    except Exception as exc:
+        # The point of calling the runtime here: the caller finds out now.
+        logger.exception("start failed for %s", pipeline_id)
+        state = await repo.update_state(pipeline_id, desired_state=DesiredState.STOPPED,
+                                        status=PipelineStatus.FAILED, last_error=str(exc))
+        raise HTTPException(502, f"failed to start pipeline: {exc}") from exc
+
+    state = await repo.update_state(pipeline_id, status=PipelineStatus.RUNNING,
+                                    producer_container=producer, last_error="")
     await repo.publish_state_event(state, "start")
-    return {"message": "Start signal sent — controller launching containers shortly", "state": state.model_dump()}
+    return {"message": "Started", "state": state.model_dump()}
 
 
 @app.post("/pipelines/{pipeline_id}/stop", tags=["pipelines"])
@@ -202,7 +220,7 @@ async def stop_pipeline(
     pipeline_id: str,
     repo: PipelineRedisRepository = Depends(_repo),
 ) -> dict[str, Any]:
-    """Set desired_state=stopped. Controller picks it up and stops containers."""
+    """Stop the pipeline and report the outcome now, not on a later poll."""
     config = await repo.get_config(pipeline_id)
     if config is None:
         raise HTTPException(404, "Pipeline not found")
@@ -211,9 +229,21 @@ async def stop_pipeline(
     state = await repo.get_state(pipeline_id)
     if state and state.desired_state == DesiredState.STOPPED:
         return {"message": "Already stopped", "state": state.model_dump()}
-    state = await repo.update_state(pipeline_id, desired_state=DesiredState.STOPPED)
+
+    state = await repo.update_state(pipeline_id, desired_state=DesiredState.STOPPED,
+                                    status=PipelineStatus.STOPPING)
+    try:
+        await _get_runtime().stop_live_pipeline(config, state)
+    except Exception as exc:
+        logger.exception("stop failed for %s", pipeline_id)
+        state = await repo.update_state(pipeline_id, status=PipelineStatus.FAILED,
+                                        last_error=str(exc))
+        raise HTTPException(502, f"failed to stop pipeline: {exc}") from exc
+
+    state = await repo.update_state(pipeline_id, status=PipelineStatus.STOPPED,
+                                    producer_container=None, last_error="")
     await repo.publish_state_event(state, "stop")
-    return {"message": "Stop signal sent — controller stopping containers shortly", "state": state.model_dump()}
+    return {"message": "Stopped", "state": state.model_dump()}
 
 
 @app.post("/pipelines/{pipeline_id}/restart", tags=["pipelines"])
@@ -224,16 +254,25 @@ async def restart_pipeline(
     config = await repo.get_config(pipeline_id)
     if config is None:
         raise HTTPException(404, "Pipeline not found")
+    if config.pipeline_type == PipelineType.NORMAL:
+        raise HTTPException(400, _NORMAL_NOT_HERE)
     state = await repo.get_state(pipeline_id)
     if state is None:
         raise HTTPException(404, "Pipeline state not found")
-    if state.desired_state == DesiredState.RUNNING:
-        state = await repo.update_state(pipeline_id, desired_state=DesiredState.STOPPED)
-        await repo.publish_state_event(state, "stop")
-        await asyncio.sleep(3)
-    state = await repo.update_state(pipeline_id, desired_state=DesiredState.RUNNING, last_error="")
+
+    try:
+        producer, _ = await _get_runtime().restart_live_pipeline(config, state)
+    except Exception as exc:
+        logger.exception("restart failed for %s", pipeline_id)
+        state = await repo.update_state(pipeline_id, status=PipelineStatus.FAILED,
+                                        last_error=str(exc))
+        raise HTTPException(502, f"failed to restart pipeline: {exc}") from exc
+
+    state = await repo.update_state(pipeline_id, desired_state=DesiredState.RUNNING,
+                                    status=PipelineStatus.RUNNING,
+                                    producer_container=producer, last_error="")
     await repo.publish_state_event(state, "start")
-    return {"message": "Restart signal sent", "state": state.model_dump()}
+    return {"message": "Restarted", "state": state.model_dump()}
 
 
 @app.get("/pipelines/{pipeline_id}/logs", tags=["pipelines"])
