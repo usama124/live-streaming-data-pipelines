@@ -1,0 +1,10 @@
+.venv/
+.git/
+.idea/
+.junie/
+__pycache__/
+*.pyc
+.pytest_cache/
+tests/
+docs/
+pipeline_definitions/

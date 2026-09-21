@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import socket
 import subprocess
+import uuid
 import sys
 import tempfile
 import time
@@ -28,6 +29,16 @@ NODE_NAMES = {
     "ns=2;i=5": "FlowRate",
     "ns=2;i=6": "MachineStatus",
 }
+
+
+def unique_id(prefix: str) -> str:
+    """A fresh pipeline id per run, so each test gets a brand-new Kafka topic.
+
+    Topics outlive a test run. A fixed id means a consumer reading from
+    `earliest` sees the *previous* run's messages and the test passes on stale
+    data — including when the thing it checks is actually broken.
+    """
+    return f"{prefix}-{uuid.uuid4().hex[:8]}"
 
 
 def free_port() -> int:
@@ -128,3 +139,133 @@ def read_json_lines(proc: subprocess.Popen, count: int, timeout: float = 45.0) -
 def mock_server():
     with MockServer() as srv:
         yield srv
+
+
+# ── Docker-backed helpers ────────────────────────────────────────────────────
+# Telegraf, the mock OPC UA servers and Kafka all run as containers on the
+# compose network. Running the mock servers in containers too (rather than on
+# the host) keeps every endpoint a plain service name and avoids host-gateway
+# plumbing that behaves differently on Linux and macOS.
+
+NETWORK = "data-platform_backend"
+PRODUCER_IMAGE = "data-platform-producer:latest"
+KAFKA_INTERNAL = "kafka:9092"
+KAFKA_EXTERNAL = "localhost:9094"
+
+
+def _compose(*args: str, check: bool = True) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["docker", "compose", *args], cwd=REPO, check=check,
+        capture_output=True, text=True, timeout=600,
+    )
+
+
+@pytest.fixture(scope="session")
+def kafka() -> str:
+    """Kafka from the root compose stack. Left as found: only torn down if we started it."""
+    running = _compose("ps", "--status", "running", "--services").stdout.split()
+    started_it = "kafka" not in running
+
+    _compose("up", "-d", "--wait", "kafka")
+    try:
+        yield KAFKA_INTERNAL
+    finally:
+        if started_it:
+            _compose("rm", "-sf", "kafka", check=False)
+
+
+@pytest.fixture(scope="session")
+def producer_image() -> str:
+    subprocess.run(
+        ["docker", "build", "-q", "-f", "services/producer_service/Dockerfile",
+         "-t", PRODUCER_IMAGE, "."],
+        cwd=REPO, check=True, capture_output=True, text=True, timeout=1800,
+    )
+    return PRODUCER_IMAGE
+
+
+class Container:
+    """A container that is always removed, however the test ends."""
+
+    def __init__(self, image: str, name: str, **kwargs) -> None:
+        self.image, self.name, self.kwargs = image, name, kwargs
+        self._c = None
+
+    def __enter__(self) -> "Container":
+        import docker
+
+        client = docker.from_env()
+        try:
+            client.containers.get(self.name).remove(force=True)
+        except Exception:
+            pass
+        self._c = client.containers.run(
+            self.image, name=self.name, detach=True, network=NETWORK, **self.kwargs
+        )
+        return self
+
+    def logs(self) -> str:
+        self._c.reload()
+        return self._c.logs().decode(errors="replace")
+
+    def status(self) -> str:
+        self._c.reload()
+        return self._c.status
+
+    def __exit__(self, *_: object) -> None:
+        if self._c:
+            try:
+                self._c.remove(force=True)
+            except Exception:
+                pass
+
+
+def mock_server_container(name: str) -> Container:
+    """The mock OPC UA server, from the producer image (it already has asyncua)."""
+    return Container(
+        PRODUCER_IMAGE, name,
+        entrypoint=["python3", "-m", "connectors.opcua.mock_server"],
+        working_dir="/opt",
+        environment={"OPCUA_SERVER_PORT": "4840", "PYTHONPATH": "/opt",
+                     "OPCUA_STATUS_EVERY": "2"},
+    )
+
+
+def telegraf_container(name: str, config_text: str) -> Container:
+    return Container(PRODUCER_IMAGE, name, environment={"TELEGRAF_CONFIG": config_text})
+
+
+def opcua_source_options(host: str) -> dict:
+    return {
+        "endpoint": f"opc.tcp://{host}:4840/stratahub/server/",
+        "node_ids": NODE_IDS,
+        "node_names": NODE_NAMES,
+        "publishing_interval_ms": 200,
+    }
+
+
+def consume(topic: str, count: int, timeout: float = 90.0) -> list[dict]:
+    """Read up to `count` JSON messages from `topic` via Kafka's external listener."""
+    import asyncio
+
+    from aiokafka import AIOKafkaConsumer
+
+    async def _run() -> list[dict]:
+        consumer = AIOKafkaConsumer(
+            topic, bootstrap_servers=KAFKA_EXTERNAL,
+            auto_offset_reset="earliest", group_id=None,
+            value_deserializer=lambda v: json.loads(v.decode()),
+        )
+        await consumer.start()
+        try:
+            out: list[dict] = []
+            deadline = time.time() + timeout
+            while len(out) < count and time.time() < deadline:
+                batch = await consumer.getmany(timeout_ms=2000)
+                for records in batch.values():
+                    out.extend(r.value for r in records)
+            return out
+        finally:
+            await consumer.stop()
+
+    return asyncio.run(_run())

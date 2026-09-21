@@ -1,4 +1,1 @@
-aiokafka==0.12.0
-pydantic-settings==2.7.1
-redis==5.2.1
-asyncua>=0.9.98        # OPC UA client (only required when SOURCE_TYPE=opcua)
+asyncua==1.1.8        # OPC UA client — the connector's only dependency

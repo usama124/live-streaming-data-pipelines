@@ -1,23 +1,31 @@
-FROM python:3.12-slim
+# Producer = Telegraf + our thin connector, per docs/ARCHITECTURE.md §3.1.
+# Telegraf owns batching, the Kafka producer, retry/backoff and metrics; the
+# connector only speaks OPC UA and writes JSON lines to stdout.
+#
+# Build from the project root:
+#   docker build -f services/producer_service/Dockerfile -t data-platform-producer:latest .
+FROM telegraf:1.35
 
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PYTHONPATH=/app:/app/app:/app/common
+# Upstream's image ships no LICENSE file, so this derived image carries the
+# notice MIT requires. Do not drop it — see THIRD-PARTY-NOTICES.md.
+COPY THIRD-PARTY-NOTICES.md /usr/share/doc/THIRD-PARTY-NOTICES.md
 
-WORKDIR /app
-
-# ── Build context must be the project root (stratahub-live-streaming/) ────────
-# Run from project root:
-#   docker build -f services/producer_service/Dockerfile -t stratahub-producer:latest .
-# Or use docker compose build from project root (docker-compose.yml sets context: .)
+# python3 for the connector; a venv because Debian's python is externally managed.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends python3 python3-venv \
+ && python3 -m venv /opt/venv \
+ && /opt/venv/bin/pip install --no-cache-dir --upgrade pip \
+ && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 COPY services/producer_service/requirements.txt /tmp/requirements.txt
-RUN pip install --no-cache-dir -r /tmp/requirements.txt
+RUN /opt/venv/bin/pip install --no-cache-dir -r /tmp/requirements.txt
 
-# common/ → /app/common/app_common/  (imported as common.app_common.*)
-COPY common /app/common
+# Puts the venv's python3 first, so the rendered config's plain "python3" command
+# resolves to the interpreter that has asyncua.
+ENV PATH=/opt/venv/bin:$PATH
 
-# app/  → /app/app/  (config, kafka_publisher, redis_control, sources/ etc.)
-COPY services/producer_service/app /app/app
+COPY connectors /opt/connectors
+COPY telegraf/templates /opt/telegraf/templates
+COPY services/producer_service/entrypoint.sh /usr/local/bin/producer-entrypoint.sh
 
-CMD ["python", "-m", "app.main"]
+ENTRYPOINT ["/usr/local/bin/producer-entrypoint.sh"]

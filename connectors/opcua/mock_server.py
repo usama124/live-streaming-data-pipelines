@@ -36,8 +36,13 @@ class MockOpcUaServer:
     }
     STATUSES = ["RUNNING", "IDLE", "MAINTENANCE", "ERROR"]
 
-    def __init__(self, host: str = "0.0.0.0", port: int = 4840) -> None:  # noqa: S104
+    def __init__(self, host: str = "0.0.0.0", port: int = 4840,  # noqa: S104
+                 status_every: int = 50) -> None:
         self._endpoint = f"opc.tcp://{host}:{port}/stratahub/server/"
+        # How often MachineStatus (the one *string* node) changes. Tests turn
+        # this down: a string value is what Telegraf's JSON parser drops when
+        # json_string_fields is wrong, so it needs to be cheap to provoke.
+        self._status_every = status_every
         self._nodes: dict[str, Any] = {}
         self._running = False
 
@@ -81,7 +86,7 @@ class MockOpcUaServer:
             for key, val in updates.items():
                 await self._nodes[key].write_value(val)
 
-            if t % 50 == 0:
+            if t % self._status_every == 0:
                 await self._nodes["MachineStatus"].write_value(random.choice(self.STATUSES))
 
             await asyncio.sleep(0.5)
@@ -97,5 +102,6 @@ if __name__ == "__main__":
         MockOpcUaServer(
             host=os.getenv("OPCUA_SERVER_HOST", "0.0.0.0"),  # noqa: S104
             port=int(os.getenv("OPCUA_SERVER_PORT", "4840")),
+            status_every=int(os.getenv("OPCUA_STATUS_EVERY", "50")),
         ).start()
     )
