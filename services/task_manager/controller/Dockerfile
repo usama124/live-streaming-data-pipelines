@@ -5,5 +5,4 @@ COPY controller/requirements.txt /tmp/req.txt
 RUN pip install --no-cache-dir -r /tmp/req.txt
 COPY common /app/common
 COPY controller /app/controller
-COPY .env /app/.env
 CMD ["python", "-m", "controller.app.main"]

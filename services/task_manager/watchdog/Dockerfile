@@ -5,5 +5,4 @@ COPY watchdog/requirements.txt /tmp/req.txt
 RUN pip install --no-cache-dir -r /tmp/req.txt
 COPY common /app/common
 COPY watchdog /app/watchdog
-COPY .env /app/.env
 CMD ["python", "-m", "watchdog.app.main"]
