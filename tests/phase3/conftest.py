@@ -20,7 +20,45 @@ NAMESPACE = "default"
 PRODUCER_IMAGE = "data-platform-producer:latest"
 
 
+_LOCAL_HOSTS = ("127.0.0.1", "localhost", "0.0.0.0", "[::1]")
+_verified_local = False
+
+
+def _assert_context_is_local() -> None:
+    """Refuse to touch a cluster that is not demonstrably local.
+
+    The name is checked, but the real test is the API server address: a kind
+    cluster's server is on 127.0.0.1, a client-managed EKS cluster's is an AWS
+    endpoint. Naming alone would not stop a context called `kind-prod`.
+
+    This exists because this machine's default kubectl context is a live
+    client-managed EKS cluster. Nothing here may run against it — see CLAUDE.md
+    and the first invariant in the project skill.
+    """
+    global _verified_local
+    if _verified_local:
+        return
+
+    assert CONTEXT.startswith("kind-"), f"refusing to run against context {CONTEXT!r}"
+
+    got = subprocess.run(
+        ["kubectl", "config", "view", "-o",
+         f'jsonpath={{.clusters[?(@.name=="{CONTEXT}")].cluster.server}}'],
+        capture_output=True, text=True, timeout=60,
+    )
+    server = got.stdout.strip()
+    assert server, f"no cluster entry for context {CONTEXT!r}"
+    assert any(host in server for host in _LOCAL_HOSTS), (
+        f"context {CONTEXT!r} points at {server}, which is not a local cluster. "
+        "Refusing to run — these tests must never touch a shared or client cluster."
+    )
+    _verified_local = True
+
+
 def kubectl(*args: str, check: bool = True) -> subprocess.CompletedProcess:
+    """Every cluster-touching call in the suite goes through here, so the guard
+    cannot be bypassed by forgetting --context on one command."""
+    _assert_context_is_local()
     return subprocess.run(["kubectl", "--context", CONTEXT, "-n", NAMESPACE, *args],
                           capture_output=True, text=True, timeout=300, check=check)
 
@@ -116,6 +154,8 @@ class PortForward:
     def __enter__(self) -> "PortForward":
         import socket
         import time
+
+        _assert_context_is_local()
 
         self._proc = subprocess.Popen(
             ["kubectl", "--context", CONTEXT, "-n", NAMESPACE, "port-forward",
