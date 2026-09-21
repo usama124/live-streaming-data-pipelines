@@ -13,7 +13,7 @@ services:
       - "8000:8000"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - /home/usama/Videos/stratahub-live-streaming/pipeline_definitions:/opt/pipeline_definitions
+      - ./pipeline_definitions:/opt/pipeline_definitions
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:
@@ -57,5 +57,9 @@ services:
     restart: unless-stopped
 
 networks:
+  # Same network the root docker-compose.yml creates, and the one DOCKER_NETWORK
+  # names — pipeline containers launched by DockerRuntime must land on it to
+  # reach kafka/clickhouse. Bring the root stack up first (it creates it).
   backend:
-    driver: bridge
+    name: data-platform_backend
+    external: true
