@@ -12,12 +12,19 @@
 ```bash
 git clone <this repo>
 cd <repo>
-cp .env.example .env
-docker compose up
+docker compose up                              # Redis, Kafka, ClickHouse, API, controller
+docker compose --profile templates build       # producer + consumer images
+docker compose --profile opcua up -d           # mock OPC UA server on :4840
 ```
 
-This brings up: Kafka, ClickHouse, the Task Manager API, and (once Phase 1/2 land) a
-Telegraf-based producer and the shared consumer pool, all via `DockerRuntime`.
+The root stack needs no `.env` — it passes its config inline. Running the tests needs the
+dev dependencies: `python -m pip install -r requirements-dev.txt`, then `pytest tests/phase0
+tests/phase1`. The Docker-backed tests build the images they need and bring up Kafka
+themselves.
+
+The root stack is Redis, Kafka, ClickHouse, the Task Manager API and the controller. Producer
+containers (Telegraf + connector) are launched per pipeline by `DockerRuntime` when a pipeline
+starts — they are not compose services. The shared consumer pool lands in Phase 2.
 
 Kubernetes-backed local dev is not required — `DockerRuntime` stays a supported mode behind
 `RuntimeAdapter` specifically so Compose keeps working for this.
@@ -25,21 +32,25 @@ Kubernetes-backed local dev is not required — `DockerRuntime` stays a supporte
 ## 3. Repo layout (target — confirm against actual tree as phases land)
 
 ```
-common/app_common/runtime/
-  base.py                 # RuntimeAdapter — 5-method interface
-  docker_runtime.py        # Compose-based implementation
-  kubernetes_runtime.py    # K8s-based implementation (Phase 3)
-task_manager/               # FastAPI: pipeline CRUD, calls RuntimeAdapter
-connectors/
-  opcua/                    # thin execd-compatible source script
-telegraf/templates/         # per-pipeline Telegraf config generation
-consumer_pool/               # aiokafka shared consumer
-k8s/                          # Deployment manifests (producer, consumer pool)
-monitoring/
-  kafka-ui/
-  prometheus/
-  otel/
-docs/                        # you are here
+connectors/opcua/
+  connector.py              # execd source script — connect, emit JSON lines  [Phase 1 ✓]
+  mock_server.py            # mock OPC UA server for dev/CI                   [Phase 1 ✓]
+telegraf/templates/
+  opcua.conf.tmpl           # per-pipeline Telegraf config template           [Phase 1 ✓]
+services/producer_service/  # producer image: Telegraf + connector            [Phase 1 ✓]
+services/task_manager/
+  common/app_common/
+    telegraf_config.py      # renders the template from a PipelineConfig      [Phase 1 ✓]
+    runtime/base.py         # RuntimeAdapter — 5-method interface
+    runtime/docker_runtime.py    # Compose-based implementation
+    runtime/kubernetes_runtime.py  # K8s implementation                       [Phase 3]
+  task_manager/             # FastAPI: pipeline CRUD, folder watcher
+  controller/, watchdog/    # deleted in Phase 3
+services/consumer_service/  # Quix consumer → shared aiokafka pool            [Phase 2]
+k8s/                        # Deployment manifests                            [Phase 3]
+monitoring/                 # kafka-ui, prometheus, otel                      [Phase 4]
+tests/phaseN/{unit,integration}/
+docs/                       # you are here
 ```
 
 ## 4. Debugging playbook
@@ -78,8 +89,14 @@ Follow this recipe for any new source (AVEVA, Modbus, a future protocol):
    protocol or JSON).
 3. Do not add Kafka publishing, retry logic, or heartbeat code to this script — that's
    Telegraf's job under `inputs.execd`. If you find yourself writing that, stop — you're
-   duplicating what the runtime already provides.
-4. Add a Telegraf config template for the new source under `telegraf/templates/`.
+   duplicating what the runtime already provides. Do not add an internal reconnect-backoff
+   loop either: exit non-zero with a clear stderr line and let Telegraf restart you, so the
+   connector can never sit alive and silent (see `ARCHITECTURE.md` §3.1).
+4. Add a Telegraf config template for the new source under `telegraf/templates/`, named
+   `<source_type>.conf.tmpl` — `telegraf_config.py` picks it up by that name. Copy
+   `opcua.conf.tmpl`: it carries two settings that are easy to omit and painful to debug,
+   `restart_delay` (what recovers a connector that exited) and `json_string_fields` (without
+   which Telegraf drops non-numeric readings with no error).
 5. Add a liveness-probe threshold for the new source type in the Kubernetes Deployment
    template — do not ship a new source without one; see `ARCHITECTURE.md` §3.1's known gap.
 6. Update `docs/BACKLOG.md` if the new source surfaces any open questions of its own.

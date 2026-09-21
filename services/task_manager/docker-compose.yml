@@ -3,8 +3,8 @@ services:
   # ── Task Manager API ────────────────────────────────────────────────────────
   task-manager:
     build:
-      context: .
-      dockerfile: task_manager/Dockerfile
+      context: ../..
+      dockerfile: services/task_manager/task_manager/Dockerfile
     image: data-platform-task-manager:latest
     deploy:
       replicas: 1
@@ -29,8 +29,8 @@ services:
   # ── Controller — 1 replica, Redis leader-locked ─────────────────────────────
   controller:
     build:
-      context: .
-      dockerfile: controller/Dockerfile
+      context: ../..
+      dockerfile: services/task_manager/controller/Dockerfile
     image: data-platform-controller:latest
     env_file: .env
     volumes:
@@ -44,8 +44,8 @@ services:
   # ── Watchdog — 1 replica, Redis leader-locked ───────────────────────────────
   watchdog:
     build:
-      context: .
-      dockerfile: watchdog/Dockerfile
+      context: ../..
+      dockerfile: services/task_manager/watchdog/Dockerfile
     image: data-platform-watchdog:latest
     env_file: .env
     volumes:

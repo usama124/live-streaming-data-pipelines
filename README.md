@@ -32,9 +32,11 @@ See `docs/ONBOARDING.md` for the full setup and debugging playbook.
 | `common/app_common/` | Models and Redis key helpers shared by the producer/consumer images |
 | `services/task_manager/` | Its own compose stack and its own copy of `app_common` (settings, Redis repo, `RuntimeAdapter`) |
 | `services/task_manager/task_manager/` | FastAPI — pipeline CRUD, lifecycle signals, folder watcher |
-| `services/task_manager/controller/` | Desired-state reconcile loop — deleted in Phase 3 |
+| `services/task_manager/controller/` | Desired-state reconcile loop — deleted in Phase 3. Without it the API records intent and nothing launches |
 | `services/task_manager/watchdog/` | Heartbeat monitor — deleted in Phase 3 |
-| `services/producer_service/` | Per-pipeline producer + OPC UA source — becomes Telegraf + a thin connector in Phase 1 |
+| `connectors/opcua/` | The thin execd connector, plus a mock OPC UA server for dev/CI |
+| `telegraf/templates/` | Per-pipeline Telegraf config templates, rendered at pipeline-create time |
+| `services/producer_service/` | The producer image: Telegraf + the connector |
 | `services/consumer_service/` | Quix Streams consumer — becomes the shared aiokafka pool in Phase 2 |
 | `clickhouse/init.sql` | Database bootstrap, runs on first ClickHouse start |
 | `k8s/` | Deployment templates — unused until Phase 3 |

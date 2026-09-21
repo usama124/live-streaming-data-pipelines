@@ -54,10 +54,31 @@ owns everything downstream — batching, the Kafka producer, retry/backoff, Prom
 Standard protocols (MQTT) use Telegraf's native input directly — no custom connector needed.
 Proprietary/industrial sources (OPC UA now, AVEVA planned) get a thin connector script.
 
+As built (Phase 1): `connectors/opcua/connector.py`, launched by a per-pipeline config
+rendered from `telegraf/templates/opcua.conf.tmpl`. The image is
+`services/producer_service/Dockerfile` — Telegraf plus the connector in a venv.
+
+**Reconnect is exit-and-restart, not an internal backoff loop.** Any connection or session
+failure logs to stderr and exits non-zero; Telegraf restarts the connector after
+`restart_delay` (10s, against the 30s the watchdog it replaces allowed). This is deliberate:
+an internal retry loop is indistinguishable, from the outside, from a connector that is alive
+and doing nothing — and that is the one state nothing downstream can detect. A bounded
+handshake timeout (`OPCUA_CONNECT_TIMEOUT_S`, default 4s) covers the endpoint that accepts
+TCP and then never answers.
+
+**Back-pressure, not dropping.** The connector writes each record straight to stdout, so a
+slow reader blocks the subscription. The implementation this replaces buffered into a bounded
+queue and dropped on overflow; silent loss is worse than back-pressure.
+
+**Trap — `json_string_fields`.** Telegraf's JSON parser drops non-numeric values unless the
+field is named there, with no error logged. A string reading (`MachineStatus = "RUNNING"`)
+vanishes silently if it is missing. The template lists `value`; registry #3 covers it.
+
 **Known gap:** Telegraf restarts the subprocess only if it exits. A silently-dead source
 session (process alive, no data) is not detected by Telegraf. This is covered by the
 Kubernetes liveness probe (§3.4), not by Telegraf itself — do not treat a connector as
-production-ready without it.
+production-ready without it. Registry #7 holds this as a `strict` xfail, so it fails the
+suite if it ever starts passing without the marker being removed deliberately.
 
 ### 3.2 Consumer pool
 

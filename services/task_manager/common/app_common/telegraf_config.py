@@ -18,11 +18,21 @@ from typing import Any
 
 from common.app_common.models import PipelineConfig
 
-# Repo-root-relative in a checkout, /opt/telegraf/templates in the image.
-_TEMPLATE_DIRS = [
-    Path("/opt/telegraf/templates"),
-    Path(__file__).resolve().parents[4] / "telegraf" / "templates",
-]
+def _template_dirs() -> list[Path]:
+    """Where to look for templates: the image path first, then a source checkout.
+
+    Resolved lazily and defensively — this module sits four directories below the
+    repo root in a checkout but only two below /app in the image, so indexing
+    .parents at import time crashed the container on startup.
+    """
+    dirs = [Path("/opt/telegraf/templates")]
+    here = Path(__file__).resolve()
+    dirs += [
+        parent / "telegraf" / "templates"
+        for parent in here.parents
+        if (parent / "telegraf" / "templates").is_dir()
+    ]
+    return dirs
 
 CONNECTOR_DIR = "/opt/connectors"
 # Go reference-time layout for RFC3339, which is what the connector emits.
@@ -41,13 +51,14 @@ def _toml(value: Any) -> str:
 
 
 def _template(source_type: str) -> Template:
-    for directory in _TEMPLATE_DIRS:
+    searched = _template_dirs()
+    for directory in searched:
         path = directory / f"{source_type}.conf.tmpl"
         if path.is_file():
             return Template(path.read_text())
     raise FileNotFoundError(
         f"no Telegraf template for source_type={source_type!r} "
-        f"(looked in {[str(d) for d in _TEMPLATE_DIRS]})"
+        f"(looked in {[str(d) for d in searched]})"
     )
 
 

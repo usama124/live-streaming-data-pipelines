@@ -24,8 +24,6 @@ class DockerRuntimeAdapter(RuntimeAdapter):
         cname = _cname("consumer", config.pipeline_id)
         await asyncio.to_thread(self._remove_if_exists, pname)
         await asyncio.to_thread(self._remove_if_exists, cname)
-        print(f"Producer ENV: {self._producer_env(config)}")
-        print(f"Consumer ENV: {self._consumer_env(config)}")
         await asyncio.to_thread(self._run, image=self._s.producer_image, name=pname,
                                 env=self._producer_env(config), role="producer",
                                 pipeline_id=config.pipeline_id)

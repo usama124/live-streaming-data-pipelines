@@ -1,8 +1,15 @@
 FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PYTHONPATH=/app
 WORKDIR /app
-COPY watchdog/requirements.txt /tmp/req.txt
+
+# Build context is the project root, so telegraf/templates can be copied in —
+# the runtime adapters render a per-pipeline Telegraf config and need them.
+#   docker build -f services/task_manager/watchdog/Dockerfile -t <tag> .
+COPY services/task_manager/watchdog/requirements.txt /tmp/req.txt
 RUN pip install --no-cache-dir -r /tmp/req.txt
-COPY common /app/common
-COPY watchdog /app/watchdog
+
+COPY services/task_manager/common /app/common
+COPY services/task_manager/watchdog /app/watchdog
+COPY telegraf/templates /opt/telegraf/templates
+
 CMD ["python", "-m", "watchdog.app.main"]

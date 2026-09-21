@@ -76,8 +76,8 @@ services:
 
   task-manager:
     build:
-      context: services/task_manager
-      dockerfile: task_manager/Dockerfile
+      context: .
+      dockerfile: services/task_manager/task_manager/Dockerfile
     image: data-platform-task-manager:latest
     container_name: task-manager
     ports:
@@ -124,6 +124,41 @@ services:
       timeout: 5s
       retries: 12
       start_period: 10s
+
+  # ── Controller — acts on desired_state, starts/stops pipeline containers ──
+  # Deleted in Phase 3, when Kubernetes owns reconciliation. Without it the API
+  # records desired_state and nothing ever launches.
+
+  controller:
+    build:
+      context: .
+      dockerfile: services/task_manager/controller/Dockerfile
+    image: data-platform-controller:latest
+    container_name: controller
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - RUNTIME_MODE=docker
+      - DOCKER_NETWORK=data-platform_backend
+      - PRODUCER_IMAGE=data-platform-producer:latest
+      - CONSUMER_IMAGE=data-platform-consumer:latest
+      - CLICKHOUSE_HOST=clickhouse
+      - CLICKHOUSE_PORT=8123
+      - CLICKHOUSE_USERNAME=default
+      - CLICKHOUSE_PASSWORD=
+      - CLICKHOUSE_DATABASE=data_platform
+      - CLICKHOUSE_TABLE=pipeline_events
+      - CONTROLLER_INTERVAL_S=3
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    networks:
+      - backend
+    restart: unless-stopped
 
   # ── OPC UA mock server (dev/CI — remove in production) ──────────────────
 
