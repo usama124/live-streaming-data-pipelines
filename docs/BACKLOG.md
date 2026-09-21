@@ -48,5 +48,5 @@ silently reversing course in code.
 | `bitnami/kafka:latest` no longer resolves (Bitnami retired those tags to `bitnamilegacy/`) | Phase 0 — root Compose pinned to `apache/kafka:3.9.1`. Found by the Phase 0 smoke test, not on the original checklist. |
 | Dead-letter design spec | Decided 2026-09-21 — `DECISION-live-pipeline-simplification.md` Proposal E (reasoning), `ARCHITECTURE.md` §3.3.1 (contract). Unblocks the Phase 2 consumer loop. |
 | `tenant_id` schema design | Decided 2026-09-21 — Proposal F: `user_<user_id>_collection_<collection_number>_<table_name>`, with `tenant_id` also an explicit column. |
-| Telegraf MIT license sign-off | Confirmed 2026-09-21 (Kamran). Attribution obligation written up per distribution form in Proposal A; Phase 1 carries the `THIRD-PARTY-NOTICES.md` task. |
+| Telegraf MIT license sign-off | Confirmed 2026-09-21 (Kamran). Attribution obligation written up per distribution form in Proposal A. `THIRD-PARTY-NOTICES.md` shipped in Phase 1 and copied into the producer image — upstream's telegraf image carries no LICENSE file of its own, so this is the only notice in it. |
 | Sequencing vs. any future platform merge | Decided 2026-09-21 — Proposal G: standalone through Phase 4, then a single merge PR into Stratahub. |

@@ -48,7 +48,7 @@ control plane entirely.
 | `controller.py` (185 lines) | **Delete** — only after Phase 3 is proven in staging |
 | `watchdog.py` (138 lines) | **Delete** — same gate as controller |
 | Leader lock (139 lines) | **Delete** — same gate; Kubernetes needs no leader election here |
-| `producer_service` (581 lines, incl. 258-line OPC UA connector) | **Split** — ~320 lines of plumbing (Kafka publish, config, Redis heartbeat, polling loop, `sources/base.py` abstraction) deleted; 258-line OPC UA logic extracted into a standalone connector script |
+| `producer_service` (581 lines, incl. 258-line OPC UA connector) | **Split — done (Phase 1).** All 581 lines of `app/` deleted. OPC UA logic now `connectors/opcua/connector.py` (~150 lines); the plumbing is gone, not moved. `services/producer_service/` is now just the image: Telegraf + the connector |
 | `quix_consumer.py` (611 lines) | **Delete** — replaced by the new aiokafka consumer pool |
 | `common/app_common/runtime/base.py` (`RuntimeAdapter`, 5 methods) | **Keep** — interface stays; add a second implementation |
 | `docker_runtime.py` (155 lines) | **Keep** — Compose stays a supported deployment mode |
@@ -140,50 +140,53 @@ manual fixes, and the Phase 0 integration suite passes.
 
 Goal: replace the custom producer container with Telegraf running a thin connector.
 
-- [ ] Extract the OPC UA logic (~258 lines) out of `producer_service` into a standalone
+- [x] Extract the OPC UA logic (~258 lines) out of `producer_service` into a standalone
       script whose only job is: connect to source → emit one record per line to stdout
       (Influx line protocol or JSON, matching Telegraf's `data_format` config)
-- [ ] Delete the plumbing that stays behind: Kafka publish client, Redis heartbeat, desired-
+- [x] Delete the plumbing that stays behind: Kafka publish client, Redis heartbeat, desired-
       state polling loop, and the generic `sources/base.py` abstraction it no longer needs
-- [ ] Write a Telegraf config template using `inputs.execd` to launch the connector script,
+- [x] Write a Telegraf config template using `inputs.execd` to launch the connector script,
       with `outputs.kafka` targeting `pipeline.<id>.events`
-- [ ] Confirm Telegraf's `restart_delay` behavior on subprocess exit matches what the
+- [x] Confirm Telegraf's `restart_delay` behavior on subprocess exit matches what the
       watchdog used to guarantee, so nothing regresses before Phase 3 removes the watchdog
-- [ ] Update `task_manager`'s pipeline-create path to generate the per-pipeline Telegraf
+      — **confirmed:** `restart_delay = 10s` against the watchdog's 30s heartbeat timeout,
+      so recovery is strictly faster. Verified by registry #4, which kills the connector
+      inside a running Telegraf container and watches the sequence counter restart
+- [x] Update `task_manager`'s pipeline-create path to generate the per-pipeline Telegraf
       config instead of the old producer container's env vars
-- [ ] Ship `THIRD-PARTY-NOTICES.md` with the producer image (Telegraf, MIT, © InfluxData).
+- [x] Ship `THIRD-PARTY-NOTICES.md` with the producer image (Telegraf, MIT, © InfluxData).
       MIT requires the notice in any substantial distribution — the trap is a multi-stage
       Dockerfile that copies the binary out of the upstream image and leaves `LICENSE`
       behind. See the decision memo's Proposal A for which distribution forms trigger it
-- [ ] **Known gap, not fixed by this phase:** Telegraf restarts the subprocess only if it
+- [x] **Known gap, not fixed by this phase:** Telegraf restarts the subprocess only if it
       exits. A silently-dead OPC UA session (process alive, no data) is not caught here —
       this is what Phase 3's liveness probe exists to cover. Do not treat Phase 1 as done
       until Phase 3 lands, for any pipeline that depends on reconnect behavior.
 
 **Unit/scenario tests (`tests/phase1/unit/`):**
-- [ ] Connector emits well-formed records to stdout against a healthy mock OPC UA source
-- [ ] Telegraf forwards those records to the correct Kafka topic (`pipeline.<id>.events`) —
+- [x] Connector emits well-formed records to stdout against a healthy mock OPC UA source
+- [x] Telegraf forwards those records to the correct Kafka topic (`pipeline.<id>.events`) —
       no cross-pipeline topic leakage when two connectors run side by side
-- [ ] Connector subprocess exits (simulated crash) → Telegraf restarts it within the
+- [x] Connector subprocess exits (simulated crash) → Telegraf restarts it within the
       configured `restart_delay`, with no manual intervention
-- [ ] Connector fails to connect to the source at all (auth failure, unreachable host) →
+- [x] Connector fails to connect to the source at all (auth failure, unreachable host) →
       fails with a clear log line, does not crash Telegraf itself, does not hang silently
-- [ ] Pipeline creation generates a Telegraf config whose topic name and connector args
+- [x] Pipeline creation generates a Telegraf config whose topic name and connector args
       actually match the pipeline's `PipelineConfig`
-- [ ] **Known-gap test (expected to fail/skip until Phase 3):** connector process stays
+- [x] **Known-gap test (expected to fail/skip until Phase 3):** connector process stays
       alive but stops producing output (simulated hung source) — assert this is *not* caught
       by Telegraf alone; mark it explicitly so Phase 3's liveness-probe test is the one that
       flips it to passing, not a silent gap
 
 **Integration suite (`tests/phase1/integration/`):**
-- [ ] End-to-end against a real or realistic mock OPC UA source: create a pipeline through
+- [x] End-to-end against a real or realistic mock OPC UA source: create a pipeline through
       the actual `task_manager` API (against `DockerRuntime`, since Kubernetes doesn't exist
       yet) → verify the values landing on the Kafka topic actually match the source's known
       values, not just that "some message" arrived
-- [ ] Multiple pipelines' Telegraf instances running concurrently against different mock
+- [x] Multiple pipelines' Telegraf instances running concurrently against different mock
       sources — verify topic isolation holds under real concurrent load, not just in a
       single-pipeline unit test
-- [ ] Full producer lifecycle through the real API: create → data flows for a sustained
+- [x] Full producer lifecycle through the real API: create → data flows for a sustained
       period → stop → confirm the Telegraf process and its resources are actually torn down
 
 **Acceptance:** a pipeline created against a live OPC UA source produces events on its Kafka
@@ -422,12 +425,12 @@ tests are written and passing — don't let this drift from the actual suite. Va
 | # | Scenario | Phase | Status |
 |---|---|---|---|
 | 1 | Clean-checkout smoke test (`docker compose up`) | 0 | Passing |
-| 2 | Connector emits well-formed records against a healthy source | 1 | Not written |
-| 3 | Telegraf forwards records to the correct topic, no cross-pipeline leakage | 1 | Not written |
-| 4 | Connector subprocess crash → Telegraf restarts it | 1 | Not written |
-| 5 | Connector fails to connect → fails clearly, doesn't hang or crash Telegraf | 1 | Not written |
-| 6 | Pipeline creation generates a correct Telegraf config | 1 | Not written |
-| 7 | Silent hang is NOT caught by Telegraf alone (known-gap marker) | 1 | Not written |
+| 2 | Connector emits well-formed records against a healthy source | 1 | Passing |
+| 3 | Telegraf forwards records to the correct topic, no cross-pipeline leakage | 1 | Passing |
+| 4 | Connector subprocess crash → Telegraf restarts it | 1 | Passing |
+| 5 | Connector fails to connect → fails clearly, doesn't hang or crash Telegraf | 1 | Passing |
+| 6 | Pipeline creation generates a correct Telegraf config | 1 | Passing |
+| 7 | Silent hang is NOT caught by Telegraf alone (known-gap marker) | 1 | Written, failing (strict xfail — #19 closes it) |
 | 8 | New pipeline's topic picked up with no pool restart | 2 | Not written |
 | 9 | Two differently-shaped pipelines land in separate correct tables (schema-collision regression) | 2 | Not written |
 | 10 | Crash between insert and commit → re-processed, not dropped | 2 | Not written |
@@ -452,9 +455,9 @@ tests are written and passing — don't let this drift from the actual suite. Va
 | # | Scenario | Phase | Status |
 |---|---|---|---|
 | I1 | Clean-checkout boot (foundation for everything below) | 0 | Passing |
-| I2 | Real/mock source → Telegraf → Kafka, values verified against known source data | 1 | Not written |
-| I3 | Multiple concurrent Telegraf instances, topic isolation under real concurrent load | 1 | Not written |
-| I4 | Full producer lifecycle via real API: create → sustained data flow → stop → teardown verified | 1 | Not written |
+| I2 | Real/mock source → Telegraf → Kafka, values verified against known source data | 1 | Passing |
+| I3 | Multiple concurrent Telegraf instances, topic isolation under real concurrent load | 1 | Passing |
+| I4 | Full producer lifecycle via real API: create → sustained data flow → stop → teardown verified | 1 | Passing |
 | I5 | Full pipeline integration: API create → Telegraf → consumer pool → correct ClickHouse table | 2 | Not written |
 | I6 | Concurrent multi-pipeline soak run, varying schemas, sustained period | 2 | Not written |
 | I7 | Fault injection: kill consumer pool mid-stream under multi-pipeline load, verify full recovery | 2 | Not written |

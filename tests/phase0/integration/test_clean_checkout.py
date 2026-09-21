@@ -24,7 +24,28 @@ def _run(cmd: list[str], cwd: Path, timeout: int = 120) -> subprocess.CompletedP
     return subprocess.run(cmd, cwd=cwd, timeout=timeout, capture_output=True, text=True)
 
 
+def _conflicting_containers() -> list[str]:
+    """Fixed container_name plus a fixed network name mean only one copy of this
+    stack can run at a time. That is fine on CI, where this test runs from a
+    fresh clone against a clean daemon, but locally it collides with a stack the
+    developer (or the Phase 1 suite) already has up — so say so plainly rather
+    than failing on a raw Docker name conflict."""
+    names = {"redis", "kafka", "clickhouse", "task-manager", "controller"}
+    got = subprocess.run(
+        ["docker", "ps", "--format", "{{.Names}}"],
+        capture_output=True, text=True, timeout=60,
+    )
+    return sorted(names.intersection(got.stdout.split()))
+
+
 def test_clean_checkout_boots() -> None:
+    running = _conflicting_containers()
+    assert not running, (
+        f"another copy of this stack is already running ({', '.join(running)}). "
+        "The compose file pins container and network names, so a second copy "
+        "cannot start. Run `docker compose down` first."
+    )
+
     with tempfile.TemporaryDirectory(prefix="phase0-clean-checkout-") as tmp:
         clone = Path(tmp) / "repo"
         got = _run(["git", "clone", "--quiet", "--depth", "1", f"file://{REPO}", str(clone)], REPO)
