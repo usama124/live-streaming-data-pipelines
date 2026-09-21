@@ -49,7 +49,7 @@ control plane entirely.
 | `watchdog.py` (138 lines) | **Delete** — same gate as controller |
 | Leader lock (139 lines) | **Delete** — same gate; Kubernetes needs no leader election here |
 | `producer_service` (581 lines, incl. 258-line OPC UA connector) | **Split — done (Phase 1).** All 581 lines of `app/` deleted. OPC UA logic now `connectors/opcua/connector.py` (~150 lines); the plumbing is gone, not moved. `services/producer_service/` is now just the image: Telegraf + the connector |
-| `quix_consumer.py` (611 lines) | **Delete** — replaced by the new aiokafka consumer pool |
+| `quix_consumer.py` (611 lines) | **Deleted (Phase 2).** All of `services/consumer_service` went, replaced by `services/consumer_pool`. The root `common/` tree went with it — it was dead once the Quix consumer did, leaving `services/task_manager/common` as the single `app_common` |
 | `common/app_common/runtime/base.py` (`RuntimeAdapter`, 5 methods) | **Keep** — interface stays; add a second implementation |
 | `docker_runtime.py` (155 lines) | **Keep** — Compose stays a supported deployment mode |
 | `k8s/` | **Implement against** — templates exist but are unused; this is where `KubernetesRuntime` and the Deployment manifests land |
@@ -203,60 +203,60 @@ pattern once its protocol/API is confirmed.
 
 Goal: one shared, regex-subscribed consumer pool replaces Quix Streams and the shared-table bug.
 
-- [ ] Stand up a new consumer service using aiokafka, subscribed to `pipeline.*.events` via
+- [x] Stand up a new consumer service using aiokafka, subscribed to `pipeline.*.events` via
       `subscribe(pattern=...)`
-- [ ] Implement the core loop: `getmany()` → accumulate per topic → insert → commit, **in
+- [x] Implement the core loop: `getmany()` → accumulate per topic → insert → commit, **in
       that order** (insert before commit, so a crash mid-batch re-reads rather than drops)
-- [ ] Fix the schema-collision bug at the root: stop inferring columns from the first event
+- [x] Fix the schema-collision bug at the root: stop inferring columns from the first event
       (`ClickHouseSink._ensure_table()`'s current behavior) and instead create the table from
       an explicit per-pipeline schema at pipeline-creation time (not the current global
       `CLICKHOUSE_TABLE` setting in `docker_runtime.py:94`)
-- [ ] Add `PipelineConfig.user_id`, `PipelineConfig.collection_number`,
+- [x] Add `PipelineConfig.user_id`, `PipelineConfig.collection_number`,
       `PipelineConfig.table_name` (currently absent). The actual ClickHouse table is
       `ch_unique_identifier = f"user_{user_id}_collection_{collection_number}_{table_name}"`
       — **locate the function normal (batch) pipelines already use to generate this and call
       it from the live path**, do not write a second implementation. The consumer pool
       resolves topic → `PipelineConfig` → `ch_unique_identifier` to pick the write target;
       Kafka topic naming (`pipeline.<id>.events`) stays a separate, internal identifier
-- [ ] **Implement dead-letter handling before this ships**, not after: no exception may
+- [x] **Implement dead-letter handling before this ships**, not after: no exception may
       escape the write path, since one bad record must not stall every other pipeline
       sharing the pool. The spec is written — Proposal E in the decision memo for the
       reasoning, `ARCHITECTURE.md` §3.3.1 for the contract (error classification with
       transient as the fail-safe default, batch bisection, the shared `dead_letters` table,
       and the insert → dead-letter → commit ordering). Implement that; do not redesign it
-- [ ] Remove the Quix Streams dependency and the sync-to-async bridge it required
-- [ ] Update `task_manager`'s pipeline-create path to create the Kafka topic **and** the
+- [x] Remove the Quix Streams dependency and the sync-to-async bridge it required
+- [x] Update `task_manager`'s pipeline-create path to create the Kafka topic **and** the
       ClickHouse table before starting the producer (per the decision memo's creation flow)
 
 **Unit/scenario tests (`tests/phase2/unit/`):**
-- [ ] A newly created pipeline's topic is picked up by the running consumer pool with **no
+- [x] A newly created pipeline's topic is picked up by the running consumer pool with **no
       restart of the pool** — this is the core SaaS constraint and the single most important
       test in this phase
-- [ ] Two pipelines with different event schemas run concurrently, each landing correctly in
+- [x] Two pipelines with different event schemas run concurrently, each landing correctly in
       its own ClickHouse table — this is the direct regression test for the shared-table
       schema-collision bug this phase exists to fix
-- [ ] Simulated crash between insert and commit → on restart, the batch is re-processed, not
+- [x] Simulated crash between insert and commit → on restart, the batch is re-processed, not
       dropped (at-least-once behavior, verified, not assumed)
-- [ ] A malformed or unexpected-schema record is routed to dead-letter without raising an
+- [x] A malformed or unexpected-schema record is routed to dead-letter without raising an
       exception that escapes the write path, and without blocking other pipelines' topics
       from continuing to process
-- [ ] Consumer pool pod restart resumes from the last committed offset — no data loss, no
+- [x] Consumer pool pod restart resumes from the last committed offset — no data loss, no
       unbounded duplication
-- [ ] Topic-to-table mapping is correct under load: no pipeline's records land in another
+- [x] Topic-to-table mapping is correct under load: no pipeline's records land in another
       pipeline's table
-- [ ] Batch flush triggers correctly at the configured size/time thresholds
+- [x] Batch flush triggers correctly at the configured size/time thresholds
 
 **Integration suite (`tests/phase2/integration/`):**
-- [ ] Full pipeline integration: create a pipeline via the real API → Telegraf produces →
+- [x] Full pipeline integration: create a pipeline via the real API → Telegraf produces →
       the consumer pool consumes → correct row lands in the correct ClickHouse table,
       verified end-to-end without manually inspecting intermediate steps
-- [ ] Concurrent multi-pipeline soak run: several pipelines with varying schemas running
+- [x] Concurrent multi-pipeline soak run: several pipelines with varying schemas running
       simultaneously over a sustained period — verify no cross-contamination and no dropped
       or duplicated data beyond expected at-least-once behavior
-- [ ] Fault injection under load: kill the consumer pool mid-stream while multiple pipelines
+- [x] Fault injection under load: kill the consumer pool mid-stream while multiple pipelines
       are actively producing — verify all affected pipelines recover and resume correctly,
       not just a single isolated pipeline as in the unit-level test
-- [ ] A new pipeline is created while the pool is already under load from existing pipelines
+- [x] A new pipeline is created while the pool is already under load from existing pipelines
       — verify it's picked up correctly without degrading existing pipelines' throughput
 
 **Acceptance:** two pipelines with different OPC UA node sets (different event schemas) run
@@ -434,13 +434,13 @@ tests are written and passing — don't let this drift from the actual suite. Va
 | 5 | Connector fails to connect → fails clearly, doesn't hang or crash Telegraf | 1 | Passing |
 | 6 | Pipeline creation generates a correct Telegraf config | 1 | Passing |
 | 7 | Silent hang is NOT caught by Telegraf alone (known-gap marker) | 1 | Written, failing (strict xfail — #19 closes it) |
-| 8 | New pipeline's topic picked up with no pool restart | 2 | Not written |
-| 9 | Two differently-shaped pipelines land in separate correct tables (schema-collision regression) | 2 | Not written |
-| 10 | Crash between insert and commit → re-processed, not dropped | 2 | Not written |
-| 11 | Malformed record → dead-letter, no exception escapes, other pipelines unaffected | 2 | Not written |
-| 12 | Consumer pool restart resumes from last committed offset | 2 | Not written |
-| 13 | Topic-to-table mapping correctness under load | 2 | Not written |
-| 14 | Batch flush triggers at configured thresholds | 2 | Not written |
+| 8 | New pipeline's topic picked up with no pool restart | 2 | Passing |
+| 9 | Two differently-shaped pipelines land in separate correct tables (schema-collision regression) | 2 | Passing |
+| 10 | Crash between insert and commit → re-processed, not dropped | 2 | Passing |
+| 11 | Malformed record → dead-letter, no exception escapes, other pipelines unaffected | 2 | Passing |
+| 12 | Consumer pool restart resumes from last committed offset | 2 | Passing |
+| 13 | Topic-to-table mapping correctness under load | 2 | Passing |
+| 14 | Batch flush triggers at configured thresholds | 2 | Passing |
 | 15 | Start via API → correct replica count | 3 | Not written |
 | 16 | Stop via API → scaled to zero | 3 | Not written |
 | 17 | Restart via API → pod recreated, pipeline resumes | 3 | Not written |
@@ -461,10 +461,10 @@ tests are written and passing — don't let this drift from the actual suite. Va
 | I2 | Real/mock source → Telegraf → Kafka, values verified against known source data | 1 | Passing |
 | I3 | Multiple concurrent Telegraf instances, topic isolation under real concurrent load | 1 | Passing |
 | I4 | Full producer lifecycle via real API: create → sustained data flow → stop → teardown verified | 1 | Passing |
-| I5 | Full pipeline integration: API create → Telegraf → consumer pool → correct ClickHouse table | 2 | Not written |
-| I6 | Concurrent multi-pipeline soak run, varying schemas, sustained period | 2 | Not written |
-| I7 | Fault injection: kill consumer pool mid-stream under multi-pipeline load, verify full recovery | 2 | Not written |
-| I8 | New pipeline created while pool is under existing load, no degradation | 2 | Not written |
+| I5 | Full pipeline integration: API create → Telegraf → consumer pool → correct ClickHouse table | 2 | Passing |
+| I6 | Concurrent multi-pipeline soak run, varying schemas, sustained period | 2 | Passing |
+| I7 | Fault injection: kill consumer pool mid-stream under multi-pipeline load, verify full recovery | 2 | Passing |
+| I8 | New pipeline created while pool is under existing load, no degradation | 2 | Passing |
 | I9 | Full lifecycle via real API on `KubernetesRuntime` against a real/kind cluster | 3 | Not written |
 | I10 | Chaos test: kill producer pod + consumer pool pod during active flow, verify self-heal | 3 | Not written |
 | I11 | End-to-end liveness-probe loop: real hung source → probe fails → pod recycled → data resumes | 3 | Not written |

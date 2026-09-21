@@ -41,12 +41,17 @@ services/producer_service/  # producer image: Telegraf + connector            [P
 services/task_manager/
   common/app_common/
     telegraf_config.py      # renders the template from a PipelineConfig      [Phase 1 ✓]
+    ch_naming.py            # ch_unique_identifier — the table name            [Phase 2 ✓]
+    ch_schema.py            # table DDL, shared by the API and the pool        [Phase 2 ✓]
     runtime/base.py         # RuntimeAdapter — 5-method interface
     runtime/docker_runtime.py    # Compose-based implementation
     runtime/kubernetes_runtime.py  # K8s implementation                       [Phase 3]
   task_manager/             # FastAPI: pipeline CRUD, folder watcher
   controller/, watchdog/    # deleted in Phase 3
-services/consumer_service/  # Quix consumer → shared aiokafka pool            [Phase 2]
+services/consumer_pool/     # shared aiokafka pool                            [Phase 2 ✓]
+  app/main.py               # getmany -> insert -> commit, pattern subscribe
+  app/sink.py               # per-pipeline tables + dead_letter_events
+  app/rows.py               # Telegraf message -> row, against the declared schema
 k8s/                        # Deployment manifests                            [Phase 3]
 monitoring/                 # kafka-ui, prometheus, otel                      [Phase 4]
 tests/phaseN/{unit,integration}/
@@ -69,7 +74,17 @@ docs/                       # you are here
    events.
 3. If the topic has messages but ClickHouse doesn't: check the consumer pool's logs for
    dead-letter entries. **Never assume a silent failure is unrelated to dead-letter
-   handling** — that's exactly the case it exists to catch.
+   handling** — that's exactly the case it exists to catch. Then query it directly:
+
+   ```sql
+   SELECT failed_at, error_message, payload
+   FROM data_platform.dead_letter_events
+   WHERE pipeline_id = '<id>' ORDER BY failed_at DESC LIMIT 20;
+   ```
+
+   `dlq_rows_total{pipeline_id}` on the pool's `:9100/metrics` says the same thing without
+   a query. A pipeline whose rows are all dead-lettering usually means its declared
+   `table_schema` and what the source actually emits have diverged.
 
 **A pipeline looks "up" but data is stale (not the same as "not running"):**
 1. This is the case plain health checks don't catch — see `ARCHITECTURE.md` §3.5. Lag can be

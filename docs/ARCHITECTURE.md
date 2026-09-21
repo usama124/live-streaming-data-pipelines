@@ -67,7 +67,9 @@ This is mandatory: customers create pipelines at times outside our control, and 
 may restart shared infrastructure on pipeline creation.
 
 Core loop: `getmany()` → accumulate per topic → **insert, then commit** (in that order, so a
-crash mid-batch re-reads rather than drops rows). Topic name maps to ClickHouse table name.
+crash mid-batch re-reads rather than drops rows). The topic resolves to a `PipelineConfig`
+through Redis, cached, and the config names the table — the topic name is never parsed into
+a table name, and a cache miss is a lookup, never a restart.
 
 **Dead-letter handling lives inside this write path.** No exception may escape it — one bad
 record must not stall every other pipeline sharing the pool.
@@ -78,6 +80,36 @@ One table per pipeline, created explicitly from a declared schema at pipeline-cr
 — **never inferred from the first event seen**. Inferring from the first event is how two
 pipelines with different field sets collide on a shared or ambiguous table; it must not
 happen in this design.
+
+As built (Phase 2): `PipelineConfig.table_schema` declares the columns, the DDL lives in
+`common/app_common/ch_schema.py`, and both the API (at create time) and the pool (before its
+first write) call it — one source of DDL, so the two cannot disagree. A key a message carries
+but the schema does not declare is dropped rather than added as a column.
+
+### 3.3.1 Dead-letter handling
+
+Owned by the consumer pool's write path (`services/consumer_pool/app/sink.py`). No exception
+escapes it: the pool is shared, so an exception that gets out stalls every other pipeline
+on it.
+
+**Failures are isolated per record, not per batch.** Records that cannot be mapped are set
+aside before the insert; if the insert still fails, each remaining record is retried on its
+own so one poison row cannot discard the ~499 good ones beside it. The rest of the batch
+inserts and commits normally.
+
+Dead letters go to one shared `dead_letter_events` table — the schema is fixed, unlike
+pipeline tables, so there is nothing to gain from one per pipeline. Each row carries the
+original payload, its topic, partition and offset, the target table, the error and the
+timestamp: enough to replay it later. `dlq_rows_total{pipeline_id}` counts them for
+Prometheus.
+
+**There is no automatic replay, and no retry loop over dead letters** — replay is deliberate
+and manual, after the schema or the source is fixed. An automatic replayer re-feeds the same
+poison into the same table on a loop.
+
+A write that fails because ClickHouse itself is unreachable is *not* dead-lettered: the
+offsets stay uncommitted and the batch is re-read when it comes back. Dead-lettering there
+would drain a whole stream into the DLQ during an outage.
 
 ### 3.4 Orchestration
 

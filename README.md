@@ -37,7 +37,7 @@ See `docs/ONBOARDING.md` for the full setup and debugging playbook.
 | `connectors/opcua/` | The thin execd connector, plus a mock OPC UA server for dev/CI |
 | `telegraf/templates/` | Per-pipeline Telegraf config templates, rendered at pipeline-create time |
 | `services/producer_service/` | The producer image: Telegraf + the connector |
-| `services/consumer_service/` | Quix Streams consumer — becomes the shared aiokafka pool in Phase 2 |
+| `services/consumer_pool/` | Shared aiokafka consumer pool — pattern-subscribed, per-pipeline tables, dead-lettering |
 | `clickhouse/init.sql` | Database bootstrap, runs on first ClickHouse start |
 | `k8s/` | Deployment templates — unused until Phase 3 |
 | `scripts/` | `curl` helpers for the Task Manager API |
