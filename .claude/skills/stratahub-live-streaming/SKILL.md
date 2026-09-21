@@ -20,6 +20,17 @@ worse, silently reversing) decisions that were already made for specific, docume
 
 ## Invariants — never violate these
 
+- **NEVER run any command against the real EKS cluster (`da-eks-cluster-dev` or any
+  client-managed cluster) — no exceptions, no "just checking," no read-only assumptions.**
+  This is the client's live environment. Any action there requires the user's TL's explicit
+  approval first, obtained outside this session, every time — not inferred, not assumed from
+  a past approval. Before running *any* command that touches a Kubernetes cluster
+  (`kubectl`, Helm, cluster-scoped tooling), first check the active context
+  (`kubectl config current-context`) and confirm it points at the local dev cluster (`kind`
+  or equivalent), not `da-eks-cluster-dev` or anything resembling a shared/client context. If
+  the context is wrong, or you're unsure which cluster a command would hit, **stop and ask —
+  do not proceed and do not guess.** All Kubernetes-based development and testing in this
+  repo happens on a local `kind` cluster for exactly this reason.
 - **Never route live-pipeline data through Airflow.** Airflow orchestrates runs that end;
   live pipelines never finish. This was evaluated and rejected — don't reopen it in code.
 - **Never let an exception escape the consumer pool's write path.** One bad record must not
@@ -46,12 +57,20 @@ worse, silently reversing) decisions that were already made for specific, docume
 - **There is no `tenant_id` field in this system — don't add one.** Ownership is expressed
   through `user_id` + `collection_number`, folded into `ch_unique_identifier`:
   `user_<user_id>_collection_<collection_number>_<table_name>` (e.g.
-  `user_1_collection_22_aveva_iot`). The live path generates this with its own function,
-  `common/app_common/ch_naming.py` — call that, never rebuild the string inline. The
-  **format** is a cross-repo contract (batch names the same table the same way), so change
-  it only with a matching change there.
+  `user_1_collection_22_aveva_iot`). The live path generates this with **its own function**,
+  `common/app_common/ch_naming.py` — call it, never rebuild the string inline. There is no
+  shared function with batch to import; don't go looking for one (see the trap below).
 
 ## Traps — things that look right but aren't
+
+- **There is no shared `ch_unique_identifier` function, and the format can drift.**
+  `dataavalanche-be` builds the identifier as an inline f-string in 21 places across three
+  files; nothing is importable, and this repo may not modify that path. So the live side owns
+  `ch_naming.py`. Know the limit of the guarantee: `tests/phase2/unit/test_ch_naming.py`
+  pins *our* composition against batch's, so **our** side cannot drift unnoticed — it does
+  not read batch's code, so if batch changes its format, those tests still pass and the two
+  silently name different tables. Batch does **no** case folding and passes a UUID user id on
+  some paths; don't "tidy" either here. If you touch naming on either side, check the other.
 
 - **`inputs.exec` vs `inputs.execd` in Telegraf.** `exec` runs a command periodically and
   captures full output each time. `execd` runs a long-lived subprocess and streams stdout.
@@ -72,16 +91,11 @@ worse, silently reversing) decisions that were already made for specific, docume
   free."** It offers at-least-once delivery and no DLQ support as of the last evaluation.
   If someone proposes adopting Flink to solve either problem, that premise is wrong — check
   `DECISION-live-pipeline-simplification.md`'s Flink section before agreeing to it.
-- **Don't go looking for a shared `ch_unique_identifier` function to import.** There isn't
-  one: `dataavalanche-be` builds the identifier as an inline f-string in 21 places. The live
-  path has its own (`ch_naming.py`) by decision. What binds them is the format, guarded by
-  `tests/phase2/unit/test_ch_naming.py` — and note batch does **no** case folding and passes
-  a UUID user id on some paths, so don't "tidy" either behaviour here.
-- **Kubernetes clobbers your config with Service env vars.** A Service named `clickhouse`
-  makes kubelet set `CLICKHOUSE_PORT=tcp://10.96.x.x:8123` in every pod in the namespace,
-  which overrides the app's own `CLICKHOUSE_PORT` and crashes config parsing. Every pod spec
-  sets `enableServiceLinks: false`. Don't drop it, and expect the same class of collision for
-  any setting named after a Service.
+- **Don't reimplement `ch_unique_identifier` generation for live pipelines.** Normal
+  (batch) pipelines already compute
+  `user_<user_id>_collection_<collection_number>_<table_name>` somewhere in the codebase.
+  Find that logic and call it from the live path too — writing a second version invites the
+  two paths to drift apart on edge cases (special characters, casing, id formatting).
 - **A pipeline can look "up" while its data is stale.** Consumer lag measured in messages
   can be zero while a source-side connection is hung, not dead. Health checks based on
   process liveness or Kafka lag alone will miss this — see `ARCHITECTURE.md` §3.5.

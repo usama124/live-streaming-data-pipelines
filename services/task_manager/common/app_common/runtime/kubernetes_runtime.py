@@ -133,11 +133,25 @@ class KubernetesRuntimeAdapter(RuntimeAdapter):
     # ── Kubernetes plumbing ───────────────────────────────────────────────
 
     def _load(self) -> None:
+        """In-cluster config, or an explicitly named context — never the ambient one.
+
+        Falling back to whatever `kubectl config current-context` happens to be
+        is how a developer running this locally deploys into a shared or
+        client-managed cluster by accident. There is no safe default here, so
+        there is no default: outside a cluster, the context must be named.
+        """
         if self._loaded:
             return
         try:
             kube_config.load_incluster_config()
         except kube_config.ConfigException:
+            if not self._context:
+                raise RuntimeError(
+                    "No in-cluster Kubernetes config and no explicit kube_context. "
+                    "Refusing to fall back to the ambient kubectl context, which may "
+                    "point at a shared or client-managed cluster. Set KUBE_CONTEXT "
+                    "(e.g. kind-stratahub-live) to run against a local cluster."
+                ) from None
             kube_config.load_kube_config(context=self._context)
         self._loaded = True
 

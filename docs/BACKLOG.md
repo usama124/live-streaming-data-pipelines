@@ -30,6 +30,7 @@ one-line pointer to the commit/PR that closed it — don't delete history from t
 |---|---|
 | Per-record lineage / compliance requirement | If required, Apache NiFi's data provenance is the strongest open-source option — but adopting NiFi as the data plane is a bigger architectural swing than anything currently planned. Settle this before it forces a redesign mid-build. |
 | Sequencing vs. any future platform merge | Affects whether this ships as a standalone release or a merge PR. Not yet decided. |
+| `ch_unique_identifier` format can drift from batch, one-directionally | Decided 2026-09-21: the live path owns `ch_naming.py` rather than importing from `dataavalanche-be` — there is no function there to import (21 inline copies), the repo may not be modified from here, and importing its backend package for a string format would drag its dependency tree into the consumer pool. **The residual risk is real and asymmetric:** `tests/phase2/unit/test_ch_naming.py` pins our composition against batch's, so our side cannot drift unnoticed, but it does not read batch's code — if batch changes format, our tests still pass and the two silently name different tables. Batch does no case folding and uses a UUID user id on some paths. Cheap fix, needs a change in the other repo and TL approval: a shared `(user_id, collection_number, table_name) -> expected name` fixture checked into both, so whichever side changes the format breaks its own test. |
 | Docker Compose as a long-term supported deployment mode | Current assumption: yes, keep `DockerRuntime` behind `RuntimeAdapter` alongside `KubernetesRuntime`. Revisit if the cost of maintaining two runtimes outweighs the value. |
 
 ## Explicitly rejected — do not re-litigate without new information
@@ -49,7 +50,7 @@ silently reversing course in code.
 | `ch_unique_identifier` / table identity | Phase 2 — `common/app_common/ch_naming.py`. Decided 2026-09-21: the live path owns its own function; batch builds the same shape inline in another repo, so the *format* is the contract and `tests/phase2/unit/test_ch_naming.py` pins it. |
 
 - **ClickHouse table naming / "tenant_id" schema design** — there is no separate `tenant_id`
-  concept in this system. Live pipelines reuse the exact `ch_unique_identifier` scheme
-  normal pipelines already use: `user_<user_id>_collection_<collection_number>_<table_name>`
-  (e.g. `user_1_collection_22_aveva_iot`), via the same shared naming logic both paths call.
-  See `ARCHITECTURE.md` §4 and `DECISION-live-pipeline-simplification.md`.
+  concept in this system. Ownership is `user_<user_id>_collection_<collection_number>_<table_name>`
+  (e.g. `user_1_collection_22_aveva_iot`). The live path generates it with its own function,
+  `common/app_common/ch_naming.py`; batch builds the same shape independently in another repo.
+  See `ARCHITECTURE.md` §4.

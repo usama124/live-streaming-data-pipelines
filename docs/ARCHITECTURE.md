@@ -168,10 +168,21 @@ Three layers, not one:
   ```
 
   e.g. `user_1_collection_22_aveva_iot`. The live path generates this with its own function,
-  `common/app_common/ch_naming.py` — every component calls it rather than rebuilding the
-  string. The batch path builds the same shape independently (inline, in another repo), so
-  the **format** is a cross-repo contract even though the code is not shared: both must name
-  the same table for the same inputs. `tests/phase2/unit/test_ch_naming.py` pins it.
+  `common/app_common/ch_naming.py`; every component calls it rather than rebuilding the
+  string. Batch builds the same shape independently — an inline f-string in 21 places in
+  another repo — so the **format** is a cross-repo contract even though the code is not
+  shared: both must name the same table for the same inputs.
+
+  *Why separate rather than shared:* there is no batch function to import. Creating one means
+  refactoring 21 call sites in a repo this one may not touch, and importing from that backend
+  would pull its whole dependency tree into the consumer pool for the sake of a string
+  format — and would let a batch-side change silently rename live's tables on the next deploy.
+
+  *The limit of the guarantee:* `tests/phase2/unit/test_ch_naming.py` pins our composition
+  against batch's expression, so **our** side cannot drift unnoticed. It does not read
+  batch's code. If batch changes its format, those tests still pass and the two diverge
+  silently. Tracked in `BACKLOG.md`; the cheap fix is a shared input/expected-name fixture
+  checked into both repos.
 - Kafka topic naming (`pipeline.<id>.events`, matched by `pipeline.*.events`) is a separate,
   internal identifier — it is **not** the ClickHouse table name. The consumer pool resolves
   topic → `PipelineConfig` → `ch_unique_identifier` to know which table to write to.

@@ -158,3 +158,22 @@ def test_liveness_probe_is_present_with_a_real_threshold() -> None:
     # The probe must not be able to fire before the connector has had a chance
     # to connect and read once.
     assert probe["initialDelaySeconds"] > staleness_threshold_for(config)
+
+
+def test_adapter_refuses_the_ambient_kubectl_context() -> None:
+    """Outside a cluster the context must be named explicitly.
+
+    The ambient context on a developer machine can be a shared or client-managed
+    cluster, so there is no safe default to fall back to.
+    """
+    from common.app_common.runtime.kubernetes_runtime import KubernetesRuntimeAdapter
+
+    class _Settings:
+        kafka_bootstrap_servers = "kafka:9092"
+        producer_image = "data-platform-producer:latest"
+        image_pull_policy = "IfNotPresent"
+
+    adapter = KubernetesRuntimeAdapter(_Settings(), namespace="default", kube_context=None)
+
+    with pytest.raises(RuntimeError, match="ambient kubectl context"):
+        adapter._load()
