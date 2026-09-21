@@ -16,6 +16,9 @@ one-line pointer to the commit/PR that closed it — don't delete history from t
 
 | Item | Depends on | Notes |
 |---|---|---|
+| Delete `controller.py`, `watchdog.py` and the leader lock | Staging proof | Phase 3 made them redundant — the API drives the runtime directly and Kubernetes reconciles — but the plan gates deletion on staging, which has not run. They stay wired into the Compose stack, where the controller is still what starts containers. |
+| I13 — node-failure reschedule | A multi-node staging cluster | Explicitly staging-only in the plan. The kind cluster used here is single-node, so host-failure recovery — the one capability that did not exist before — is argued from Kubernetes' behaviour rather than demonstrated. |
+| No liveness probe on the Compose path | — | `DockerRuntime` has nothing that fails a health check and recycles a stalled producer, so registry #7 stays xfail there. Fine for local dev; not a sign Phase 3 is incomplete. |
 | AVEVA connector | Phase 1 pattern | Follows the same thin-connector-under-execd pattern as OPC UA. Protocol/API specifics (Historian vs. PI System vs. System Platform) need confirming before scoping. |
 | MQTT source | Phase 1 pattern | Likely needs zero custom connector code — Telegraf ships a native MQTT input. Confirm before assuming a custom connector is required. |
 | Per-user health API | Phase 4 (monitoring) | Design only in Phase 4; a product-facing surface, not a Grafana dashboard, since Grafana holds data across every user's pipelines. |
