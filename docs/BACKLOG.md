@@ -9,7 +9,8 @@ one-line pointer to the commit/PR that closed it — don't delete history from t
 
 | Item | Blocks | Notes |
 |---|---|---|
-| Liveness probe thresholds | Phase 3 (orchestration) | Needs an actual staleness number per source type (OPC UA now; AVEVA/Modbus later), not just the mechanism. |
+| I13 — node-failure reschedule, on a real multi-node cluster | Rollout | **The one capability that is argued but not demonstrated.** Host-failure recovery is the headline gain of the Kubernetes move, and nothing has shown it happening: the kind cluster used for Phase 3 is single-node, so a cordon/drain there proves nothing. Needs a multi-node staging cluster — drain or kill a node carrying a producer pod, confirm it is rescheduled onto a healthy one. Until then treat host-failure recovery as expected, not verified. |
+| 60s liveness threshold — validate against a real source | Rollout | The mechanism is built and tested (registry #19, I11); the number is a desk estimate. OPC UA publishes on *change*, so the risk is asymmetric: too low and pipelines whose sensors are legitimately static get restarted in a loop, which is worse than the stall it guards against. Measure the real inter-notification gap on a live source before rollout, and set a per-source number for AVEVA/Modbus when they land. |
 | Telegraf MIT license sign-off | Phase 1 (producer) | No known blocker — needs a formal confirmation from legal, not a technical decision. |
 
 ## Follow-on work — not blocking, sequenced after the core build
@@ -17,7 +18,6 @@ one-line pointer to the commit/PR that closed it — don't delete history from t
 | Item | Depends on | Notes |
 |---|---|---|
 | Delete `controller.py`, `watchdog.py` and the leader lock | Staging proof | Phase 3 made them redundant — the API drives the runtime directly and Kubernetes reconciles — but the plan gates deletion on staging, which has not run. They stay wired into the Compose stack, where the controller is still what starts containers. |
-| I13 — node-failure reschedule | A multi-node staging cluster | Explicitly staging-only in the plan. The kind cluster used here is single-node, so host-failure recovery — the one capability that did not exist before — is argued from Kubernetes' behaviour rather than demonstrated. |
 | No liveness probe on the Compose path | — | `DockerRuntime` has nothing that fails a health check and recycles a stalled producer, so registry #7 stays xfail there. Fine for local dev; not a sign Phase 3 is incomplete. |
 | AVEVA connector | Phase 1 pattern | Follows the same thin-connector-under-execd pattern as OPC UA. Protocol/API specifics (Historian vs. PI System vs. System Platform) need confirming before scoping. |
 | MQTT source | Phase 1 pattern | Likely needs zero custom connector code — Telegraf ships a native MQTT input. Confirm before assuming a custom connector is required. |
