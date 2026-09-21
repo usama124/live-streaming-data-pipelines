@@ -17,6 +17,7 @@ import uuid
 import pytest
 import requests
 
+from tests.conftest import unique_table
 from tests.phase3.conftest import kubectl
 
 pytestmark = pytest.mark.usefixtures("in_cluster_stack")
@@ -82,7 +83,7 @@ def test_i9_full_lifecycle_on_kubernetes(api, clickhouse) -> None:
     """I9 — create, data flows to the right table, stop, resources actually gone."""
     pipeline_id = unique_id("i9")
 
-    table = create_and_start(api, pipeline_id, collection_number=9, table_name="k8s_e2e")
+    table = create_and_start(api, pipeline_id, collection_number=9, table_name=unique_table("k8s_e2e"))
     try:
         wait_for(lambda: ch_count(clickhouse, table) >= 10,
                  what=f"rows in {table} via KubernetesRuntime")
@@ -105,7 +106,7 @@ def test_i9_full_lifecycle_on_kubernetes(api, clickhouse) -> None:
 def test_i10_killing_pods_self_heals(api, clickhouse) -> None:
     """I10 — kill a producer pod and a pool pod during active flow."""
     pipeline_id = unique_id("i10")
-    table = create_and_start(api, pipeline_id, collection_number=10, table_name="chaos")
+    table = create_and_start(api, pipeline_id, collection_number=10, table_name=unique_table("chaos"))
     try:
         wait_for(lambda: ch_count(clickhouse, table) >= 5, what="flow before the chaos")
         before = ch_count(clickhouse, table)
@@ -131,7 +132,7 @@ def test_i11_liveness_probe_recycles_a_stalled_producer(api) -> None:
     """
     pipeline_id = unique_id("i11")
     # Short threshold so the probe fires inside a test's patience.
-    create_and_start(api, pipeline_id, collection_number=11, table_name="stalled",
+    create_and_start(api, pipeline_id, collection_number=11, table_name=unique_table("stalled"),
                      staleness_threshold_s=20)
     try:
         wait_for(lambda: kubectl("get", "pods", "-l", f"pipeline-id={pipeline_id}",
@@ -165,13 +166,13 @@ def test_i12_phase2_guarantees_hold_under_the_new_runtime(api, clickhouse) -> No
     pipelines, separate tables, no cross-contamination, new pipeline picked up
     with no pool restart."""
     id_a, id_b = unique_id("i12a"), unique_id("i12b")
-    table_a = create_and_start(api, id_a, collection_number=12, table_name="parity_a")
+    table_a = create_and_start(api, id_a, collection_number=12, table_name=unique_table("parity_a"))
     try:
         wait_for(lambda: ch_count(clickhouse, table_a) >= 5, what="pipeline A flowing")
 
         # B is created while the pool is already busy, and the pool is never
         # restarted here — the same constraint Phase 2's #8 checks.
-        table_b = create_and_start(api, id_b, collection_number=12, table_name="parity_b")
+        table_b = create_and_start(api, id_b, collection_number=12, table_name=unique_table("parity_b"))
         wait_for(lambda: ch_count(clickhouse, table_b) >= 5, what="pipeline B picked up")
 
         assert table_a != table_b

@@ -1,0 +1,39 @@
+# Scrape targets for the live-streaming stack.
+#
+# Three layers, per docs/ARCHITECTURE.md §3.5:
+#   is it flowing  — consumer pool counters, Kafka UI for lag
+#   how stale      — pipeline_last_event_timestamp_seconds (see the rules below)
+#   what a user sees — not here; Prometheus holds every user's pipelines and is
+#                      never shown to one of them directly.
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/rules.yml
+
+scrape_configs:
+  - job_name: consumer-pool
+    static_configs:
+      - targets: ["consumer-pool:9100"]
+
+  - job_name: clickhouse
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["clickhouse:9363"]
+
+  # Producers are per-pipeline and come and go, so listing them statically is not
+  # possible. Under Compose they are discovered from Docker by the label
+  # DockerRuntime already sets; under Kubernetes the equivalent is pod discovery.
+  - job_name: producers
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        filters:
+          - name: label
+            values: ["data-platform.role=producer"]
+    relabel_configs:
+      - source_labels: [__meta_docker_container_label_data_platform_pipeline_id]
+        target_label: pipeline_id
+      - source_labels: [__meta_docker_network_ip]
+        target_label: __address__
+        replacement: "$1:9273"

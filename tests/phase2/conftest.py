@@ -34,22 +34,6 @@ def _compose(*args: str, check: bool = True) -> subprocess.CompletedProcess:
                           capture_output=True, text=True, timeout=900)
 
 
-@pytest.fixture(scope="session")
-def infra():
-    """Kafka + ClickHouse + Redis, from the root compose stack."""
-    _compose("up", "-d", "--wait", "kafka", "clickhouse", "redis")
-    yield
-
-
-@pytest.fixture(scope="session")
-def pool_image() -> str:
-    subprocess.run(
-        ["docker", "build", "-q", "-f", "services/consumer_pool/Dockerfile", "-t", POOL_IMAGE, "."],
-        cwd=REPO, check=True, capture_output=True, text=True, timeout=1800,
-    )
-    return POOL_IMAGE
-
-
 def ch_query(sql: str) -> list[list]:
     """Run SQL against ClickHouse over HTTP, returning parsed JSON rows."""
     import requests
@@ -116,27 +100,6 @@ def telegraf_message(pipeline_id: str, *, sensor: str = "temperature",
                  "quality": "good", "node_id": "ns=2;i=2"},
         "fields": {"value": value, "sequence": sequence},
     }
-
-
-@pytest.fixture(scope="session")
-def platform(infra, pool_image):
-    """API, controller and the pool, all real."""
-    _compose("up", "-d", "--build", "--wait", "task-manager", "controller")
-    _compose("up", "-d", "--build", "consumer-pool")
-
-    import urllib.request
-
-    deadline = time.time() + 120
-    while time.time() < deadline:
-        try:
-            with urllib.request.urlopen("http://localhost:8000/health", timeout=5) as r:
-                if json.load(r)["status"] == "ok":
-                    break
-        except Exception:
-            time.sleep(2)
-    else:
-        raise AssertionError("task-manager never became healthy")
-    yield
 
 
 def create_pipeline(pipeline_id: str, *, user_id: str = "1", collection_number: int = 1,

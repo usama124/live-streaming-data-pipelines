@@ -16,10 +16,12 @@ the ~499 good ones beside it.
 """
 
 import logging
+import time
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Sequence
 
-from prometheus_client import Counter
+from prometheus_client import Counter, Gauge
 
 from common.app_common.ch_schema import (
     DLQ_TABLE,
@@ -38,6 +40,23 @@ dlq_rows_total = Counter(
 )
 rows_written_total = Counter(
     "rows_written_total", "Records inserted into a pipeline's table", ["pipeline_id"]
+)
+
+# Exported as a *timestamp*, not an age, on purpose. A gauge holding "seconds
+# stale" stops moving the moment a pipeline stops producing — which is exactly
+# when staleness matters — whereas `time() - this` in PromQL keeps growing.
+# This is the metric that catches a stalled-but-connected source, the case Kafka
+# lag cannot see: lag is zero because nothing is arriving, while the newest
+# reading gets older and older.
+pipeline_last_event_timestamp_seconds = Gauge(
+    "pipeline_last_event_timestamp_seconds",
+    "Source timestamp of the newest record written for this pipeline (unix seconds)",
+    ["pipeline_id"],
+)
+pipeline_last_write_timestamp_seconds = Gauge(
+    "pipeline_last_write_timestamp_seconds",
+    "When the pool last inserted anything for this pipeline (unix seconds)",
+    ["pipeline_id"],
 )
 
 _DLQ_COLUMNS = ["pipeline_id", "topic", "partition", "offset",
@@ -59,6 +78,21 @@ class WriteResult:
     written: int = 0
     dead_lettered: int = 0
     errors: list[str] = field(default_factory=list)
+
+
+def _record_freshness(pipeline_id: str, rows: list[list[Any]], columns: list[str]) -> None:
+    """Publish how fresh this pipeline's newest reading is."""
+    pipeline_last_write_timestamp_seconds.labels(pipeline_id=pipeline_id).set(time.time())
+    if "event_time" not in columns:
+        return
+    index = columns.index("event_time")
+    newest = max(
+        (row[index] for row in rows if isinstance(row[index], datetime)), default=None
+    )
+    if newest is not None:
+        pipeline_last_event_timestamp_seconds.labels(pipeline_id=pipeline_id).set(
+            newest.timestamp()
+        )
 
 
 class ClickHouseSink:
@@ -125,6 +159,7 @@ class ClickHouseSink:
 
         if result.written:
             rows_written_total.labels(pipeline_id=config.pipeline_id).inc(result.written)
+            _record_freshness(config.pipeline_id, rows, columns)
         return result
 
     async def _insert(self, table: str, columns: list[str], rows: list[list[Any]]) -> None:

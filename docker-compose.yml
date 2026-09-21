@@ -56,6 +56,7 @@ services:
     ports:
       - "8123:8123"
       - "9000:9000"
+      - "9363:9363"   # Prometheus endpoint, enabled by clickhouse/prometheus.xml
     environment:
       - CLICKHOUSE_DB=data_platform
       - CLICKHOUSE_USER=default
@@ -64,6 +65,7 @@ services:
     volumes:
       - clickhouse-data:/var/lib/clickhouse
       - ./clickhouse/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - ./clickhouse/prometheus.xml:/etc/clickhouse-server/config.d/prometheus.xml:ro
     networks:
       - backend
     healthcheck:
@@ -185,6 +187,38 @@ services:
         condition: service_healthy
       clickhouse:
         condition: service_healthy
+    networks:
+      - backend
+    restart: unless-stopped
+
+  # ── Monitoring ───────────────────────────────────────────────────────────
+
+  kafka-ui:
+    image: ghcr.io/kafbat/kafka-ui:v1.0.0
+    container_name: kafka-ui
+    ports:
+      - "8090:8080"
+    environment:
+      - KAFKA_CLUSTERS_0_NAME=live
+      - KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS=kafka:9092
+      - DYNAMIC_CONFIG_ENABLED=true
+    depends_on:
+      kafka:
+        condition: service_healthy
+    networks:
+      - backend
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v3.0.1
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/prometheus/rules.yml:/etc/prometheus/rules.yml:ro
+      # Read-only, for discovering per-pipeline producer containers by label.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     networks:
       - backend
     restart: unless-stopped

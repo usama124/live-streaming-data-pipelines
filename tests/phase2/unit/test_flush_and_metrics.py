@@ -11,6 +11,7 @@ import pytest
 import requests
 
 from consumer_pool.app.config import Settings
+from tests.conftest import unique_table
 from tests.phase2.conftest import (
     ch_count,
     create_pipeline,
@@ -39,7 +40,7 @@ def test_defaults_are_a_bounded_batch_and_a_bounded_wait() -> None:
 def test_a_trickle_lands_without_waiting_for_a_full_batch() -> None:
     """Three records, far below batch_size — the time threshold must flush them."""
     pipeline_id = unique_id("p14t")
-    table = create_pipeline(pipeline_id, collection_number=14, table_name="trickle")["table"]
+    table = create_pipeline(pipeline_id, collection_number=14, table_name=unique_table("trickle"))["table"]
 
     produce(f"pipeline.{pipeline_id}.events",
             [telegraf_message(pipeline_id, sequence=i) for i in range(3)])
@@ -50,7 +51,7 @@ def test_a_trickle_lands_without_waiting_for_a_full_batch() -> None:
 
 def test_a_burst_larger_than_one_batch_keeps_its_remainder() -> None:
     pipeline_id = unique_id("p14b")
-    table = create_pipeline(pipeline_id, collection_number=14, table_name="burst")["table"]
+    table = create_pipeline(pipeline_id, collection_number=14, table_name=unique_table("burst"))["table"]
     count = Settings().batch_size + 50
 
     produce(f"pipeline.{pipeline_id}.events",
@@ -62,7 +63,7 @@ def test_a_burst_larger_than_one_batch_keeps_its_remainder() -> None:
 
 def test_dlq_writes_increment_a_prometheus_counter_tagged_by_pipeline() -> None:
     pipeline_id = unique_id("p14m")
-    create_pipeline(pipeline_id, collection_number=14, table_name="metric_case")
+    create_pipeline(pipeline_id, collection_number=14, table_name=unique_table("metric_case"))
 
     produce(f"pipeline.{pipeline_id}.events", [b"not json", b"still not json"])
     wait_for(lambda: dlq_count(pipeline_id) >= 2, timeout=120, what="2 dead letters")

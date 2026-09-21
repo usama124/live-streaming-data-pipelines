@@ -38,3 +38,14 @@
   compression_codec = 0
   required_acks = -1
   max_retry = 3
+
+# Telegraf's own metrics — input/output counts, execd subprocess restarts, write
+# errors. This is how Prometheus sees a producer at all; the connector itself
+# serves only /healthz for kubelet.
+[[outputs.prometheus_client]]
+  listen = ":$METRICS_PORT"
+  metric_version = 2
+  path = "/metrics"
+
+[[inputs.internal]]
+  collect_memstats = false

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import pytest
 
+from tests.conftest import unique_table
 from tests.phase2.conftest import (
     ch_count,
     ch_query,
@@ -28,7 +29,7 @@ def test_8_new_pipeline_is_picked_up_with_no_pool_restart() -> None:
     """The core SaaS constraint: customers create pipelines whenever they like,
     and shared infrastructure may not be bounced to notice."""
     pipeline_id = unique_id("p8")
-    created = create_pipeline(pipeline_id, collection_number=8, table_name="picked_up")
+    created = create_pipeline(pipeline_id, collection_number=8, table_name=unique_table("picked_up"))
     table = created["table"]
 
     # Deliberately no restart of the pool between creation and producing.
@@ -50,8 +51,8 @@ def test_9_two_shapes_land_in_their_own_tables() -> None:
         "value_text": "Nullable(String)",
         "ingested_at": "DateTime64(3)",
     }
-    table_a = create_pipeline(id_a, collection_number=9, table_name="shape_a")["table"]
-    table_b = create_pipeline(id_b, collection_number=9, table_name="shape_b",
+    table_a = create_pipeline(id_a, collection_number=9, table_name=unique_table("shape_a"))["table"]
+    table_b = create_pipeline(id_b, collection_number=9, table_name=unique_table("shape_b"),
                               table_schema=schema_b)["table"]
 
     produce(f"pipeline.{id_a}.events", [telegraf_message(id_a, value=1.5, sequence=i)
@@ -77,7 +78,7 @@ def test_11_bad_record_dead_letters_without_stalling_the_pipeline() -> None:
     """One unusable record must not take the batch, the pipeline, or the pool
     down with it."""
     pipeline_id = unique_id("p11")
-    table = create_pipeline(pipeline_id, collection_number=11, table_name="dlq_case")["table"]
+    table = create_pipeline(pipeline_id, collection_number=11, table_name=unique_table("dlq_case"))["table"]
     topic = f"pipeline.{pipeline_id}.events"
 
     good_before = [telegraf_message(pipeline_id, sequence=i) for i in range(3)]
@@ -108,8 +109,8 @@ def test_11_bad_record_dead_letters_without_stalling_the_pipeline() -> None:
 def test_11b_one_pipelines_poison_does_not_block_another() -> None:
     """The shared-pool risk: a bad record on one topic stalling every other."""
     bad_id, good_id = unique_id("p11bad"), unique_id("p11good")
-    create_pipeline(bad_id, collection_number=11, table_name="poisoned")
-    good_table = create_pipeline(good_id, collection_number=11, table_name="unaffected")["table"]
+    create_pipeline(bad_id, collection_number=11, table_name=unique_table("poisoned"))
+    good_table = create_pipeline(good_id, collection_number=11, table_name=unique_table("unaffected"))["table"]
 
     produce(f"pipeline.{bad_id}.events", [b"{{{ not json", b"also not json"])
     produce(f"pipeline.{good_id}.events",
@@ -123,7 +124,7 @@ def test_12_pool_restart_resumes_from_the_last_committed_offset() -> None:
     """No loss. Duplicates are allowed — this is at-least-once by design — but
     must stay bounded rather than replaying the topic from the start."""
     pipeline_id = unique_id("p12")
-    table = create_pipeline(pipeline_id, collection_number=12, table_name="restart_case")["table"]
+    table = create_pipeline(pipeline_id, collection_number=12, table_name=unique_table("restart_case"))["table"]
     topic = f"pipeline.{pipeline_id}.events"
 
     produce(topic, [telegraf_message(pipeline_id, sequence=i) for i in range(10)])
@@ -142,7 +143,7 @@ def test_12_pool_restart_resumes_from_the_last_committed_offset() -> None:
 
 def test_13_topic_to_table_mapping_holds_under_load() -> None:
     """Several pipelines producing at once; nothing may cross over."""
-    pipelines = {unique_id(f"p13{i}"): f"load_{i}" for i in range(4)}
+    pipelines = {unique_id(f"p13{i}"): unique_table(f"load_{i}") for i in range(4)}
     tables = {
         pid: create_pipeline(pid, collection_number=13, table_name=name)["table"]
         for pid, name in pipelines.items()

@@ -15,6 +15,7 @@ import pytest
 import requests
 
 from tests.phase1.conftest import mock_server_container, producer_image  # noqa: F401
+from tests.conftest import unique_table
 from tests.phase2.conftest import (
     ch_count,
     ch_query,
@@ -68,14 +69,14 @@ def test_i5_api_create_to_the_right_clickhouse_table() -> None:
 
     with mock_server_container("i5-mock"):
         table = _create_and_start(pipeline_id, "i5-mock",
-                                  collection_number=5, table_name="end_to_end")
+                                  collection_number=5, table_name=unique_table("end_to_end"))
         try:
             wait_for(lambda: ch_count(table) >= 10, timeout=240,
                      what=f"10 rows in {table} via the full path")
         finally:
             _stop(pipeline_id)
 
-    assert table == f"user_1_collection_5_end_to_end"
+    assert table.startswith("user_1_collection_5_end_to_end")
 
     # The values are the source's, not just "some rows".
     rows = ch_query(
@@ -105,9 +106,9 @@ def test_i6_concurrent_pipelines_with_different_schemas() -> None:
     }
 
     with mock_server_container("i6-mock-a"), mock_server_container("i6-mock-b"):
-        table_a = _create_and_start(id_a, "i6-mock-a", collection_number=6, table_name="soak_a")
+        table_a = _create_and_start(id_a, "i6-mock-a", collection_number=6, table_name=unique_table("soak_a"))
         table_b = _create_and_start(id_b, "i6-mock-b", collection_number=6,
-                                    table_name="soak_b", table_schema=narrow)
+                                    table_name=unique_table("soak_b"), table_schema=narrow)
         try:
             wait_for(lambda: ch_count(table_a) >= 20 and ch_count(table_b) >= 20,
                      timeout=300, what="both pipelines sustained a flow")
@@ -129,7 +130,7 @@ def test_i7_killing_the_pool_mid_stream_recovers_every_pipeline() -> None:
 
     with mock_server_container("i7-mock"):
         tables = {
-            pid: _create_and_start(pid, "i7-mock", collection_number=7, table_name=f"chaos_{i}")
+            pid: _create_and_start(pid, "i7-mock", collection_number=7, table_name=unique_table(f"chaos_{i}"))
             for i, pid in enumerate(ids)
         }
         try:
@@ -157,7 +158,7 @@ def test_i8_new_pipeline_joins_while_the_pool_is_under_load() -> None:
 
     with mock_server_container("i8-mock"):
         busy_tables = {
-            pid: _create_and_start(pid, "i8-mock", collection_number=8, table_name=f"busy_{i}")
+            pid: _create_and_start(pid, "i8-mock", collection_number=8, table_name=unique_table(f"busy_{i}"))
             for i, pid in enumerate(busy_ids)
         }
         try:
@@ -167,7 +168,7 @@ def test_i8_new_pipeline_joins_while_the_pool_is_under_load() -> None:
 
             # No restart of the pool anywhere in here.
             late_table = _create_and_start(late_id, "i8-mock", collection_number=8,
-                                           table_name="joined_late")
+                                           table_name=unique_table("joined_late"))
             wait_for(lambda: ch_count(late_table) >= 5, timeout=240,
                      what="the late pipeline was picked up without a restart")
 

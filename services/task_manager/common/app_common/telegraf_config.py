@@ -35,6 +35,7 @@ def _template_dirs() -> list[Path]:
     return dirs
 
 CONNECTOR_DIR = "/opt/connectors"
+METRICS_PORT = 9273  # Telegraf's conventional Prometheus port
 # Go reference-time layout for RFC3339, which is what the connector emits.
 _TIME_FORMAT = "2006-01-02T15:04:05.999999999Z07:00"
 
@@ -104,4 +105,5 @@ def render_telegraf_config(
         measurement=config.topic,
         brokers=_toml([b.strip() for b in kafka_brokers.split(",") if b.strip()]),
         topic=_toml(config.topic),
+        METRICS_PORT=METRICS_PORT,
     )

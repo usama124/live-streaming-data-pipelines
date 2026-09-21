@@ -1,0 +1,28 @@
+# Alerting rules. The staleness one is the point of this phase.
+groups:
+  - name: live-pipelines
+    rules:
+      # Kafka lag answers "is the consumer keeping up", which is a different
+      # question from "is the data current". A source that stops publishing
+      # produces zero lag forever while its newest reading ages — this is the
+      # only rule that sees that.
+      - alert: PipelineDataStale
+        expr: time() - pipeline_last_event_timestamp_seconds > 300
+        for: 2m
+        labels: {severity: warning}
+        annotations:
+          summary: "Pipeline {{ $labels.pipeline_id }} data is stale"
+          description: >-
+            Newest reading is {{ $value | humanizeDuration }} old. Kafka lag may
+            well be zero — check the source connection before the consumer.
+
+      - alert: PipelineDeadLettering
+        expr: rate(dlq_rows_total[5m]) > 0
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: "Pipeline {{ $labels.pipeline_id }} is dead-lettering records"
+          description: >-
+            Sustained dead-letter rate usually means the declared table_schema
+            and what the source actually emits have diverged. Query
+            data_platform.dead_letter_events for the reason.
