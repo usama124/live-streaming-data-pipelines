@@ -31,7 +31,6 @@ from typing import Any
 from fastapi import Depends, FastAPI, HTTPException, Query, status, Response
 from redis.asyncio import Redis
 
-from task_manager.app.airflow_client import AirflowClient
 from task_manager.app.config import settings
 from task_manager.app.folder_watcher import folder_watcher_loop
 from common.app_common.models import (
@@ -93,6 +92,11 @@ app = FastAPI(
 )
 
 
+# Batch/normal pipelines run as Airflow DAGs outside this repo. The API still
+# accepts them so definitions round-trip, but lifecycle calls belong to Airflow.
+_NORMAL_NOT_HERE = "normal pipelines are managed by Airflow, not by this service"
+
+
 def _repo() -> PipelineRedisRepository:
     if _redis is None:
         raise RuntimeError("Redis not initialised")
@@ -151,8 +155,7 @@ async def get_status(
     if config is None:
         raise HTTPException(404, "Pipeline not found")
     if config.pipeline_type == PipelineType.NORMAL:
-        return {"pipeline_id": pipeline_id, "pipeline_type": "normal",
-                "airflow": await AirflowClient().get_dag(config.airflow_dag_id or pipeline_id)}
+        raise HTTPException(400, _NORMAL_NOT_HERE)
     state = await repo.get_state(pipeline_id)
     return {"config": config.model_dump(), "state": state.model_dump() if state else None}
 
@@ -167,8 +170,7 @@ async def start_pipeline(
     if config is None:
         raise HTTPException(404, "Pipeline not found")
     if config.pipeline_type == PipelineType.NORMAL:
-        return {"pipeline_id": pipeline_id, "pipeline_type": "normal",
-                "airflow": await AirflowClient().trigger_dag(config.airflow_dag_id or pipeline_id)}
+        raise HTTPException(400, _NORMAL_NOT_HERE)
     state = await repo.get_state(pipeline_id)
     if state and state.desired_state == DesiredState.RUNNING:
         return {"message": "Already running", "state": state.model_dump()}
@@ -187,8 +189,7 @@ async def stop_pipeline(
     if config is None:
         raise HTTPException(404, "Pipeline not found")
     if config.pipeline_type == PipelineType.NORMAL:
-        return {"pipeline_id": pipeline_id, "pipeline_type": "normal",
-                "airflow": await AirflowClient().pause_dag(config.airflow_dag_id or pipeline_id, paused=True)}
+        raise HTTPException(400, _NORMAL_NOT_HERE)
     state = await repo.get_state(pipeline_id)
     if state and state.desired_state == DesiredState.STOPPED:
         return {"message": "Already stopped", "state": state.model_dump()}
