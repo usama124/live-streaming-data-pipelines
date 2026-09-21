@@ -24,15 +24,37 @@ class RecordError(Exception):
     """
 
 
+# Anything outside this is a unit mistake, not a real reading. Telegraf emits
+# seconds unless `json_timestamp_units = "1ms"` is set, and reading seconds as
+# milliseconds lands every record in 1970 — with plausible values attached, so
+# nothing else notices.
+_EARLIEST_PLAUSIBLE = datetime(2001, 1, 1, tzinfo=timezone.utc)
+_FUTURE_TOLERANCE_S = 86_400
+
+
 def _event_time(message: dict[str, Any]) -> datetime:
     raw = message.get("timestamp")
     if raw is None:
         raise RecordError("message has no timestamp")
     try:
         # Telegraf's json output is configured for milliseconds.
-        return datetime.fromtimestamp(float(raw) / 1000.0, tz=timezone.utc)
+        event_time = datetime.fromtimestamp(float(raw) / 1000.0, tz=timezone.utc)
     except (TypeError, ValueError, OSError, OverflowError) as exc:
         raise RecordError(f"unusable timestamp {raw!r}: {exc}") from exc
+
+    now = datetime.now(timezone.utc)
+    if event_time < _EARLIEST_PLAUSIBLE:
+        raise RecordError(
+            f"timestamp {raw!r} resolves to {event_time.isoformat()} — implausibly "
+            "old, which usually means the producer is emitting seconds while this "
+            "expects milliseconds (json_timestamp_units)"
+        )
+    if (event_time - now).total_seconds() > _FUTURE_TOLERANCE_S:
+        raise RecordError(
+            f"timestamp {raw!r} resolves to {event_time.isoformat()}, more than a "
+            "day in the future"
+        )
+    return event_time
 
 
 def _split_value(value: Any) -> tuple[float | None, str | None]:

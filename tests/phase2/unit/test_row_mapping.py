@@ -89,3 +89,26 @@ def test_unusable_message_raises_recorderror_for_the_dead_letter_path(bad: dict)
 
     with pytest.raises(RecordError):
         to_row(message, CONFIG)
+
+
+def test_seconds_where_milliseconds_are_expected_is_rejected_not_stored() -> None:
+    """The exact bug I14 caught: Telegraf emits seconds by default, this expects
+    milliseconds, and the result was a valid-looking row timestamped 1970.
+
+    A wrong-unit timestamp must dead-letter loudly rather than quietly poison
+    every staleness number downstream.
+    """
+    import time
+
+    seconds_not_millis = int(time.time())
+
+    with pytest.raises(RecordError, match="milliseconds"):
+        to_row(_message(timestamp=seconds_not_millis), CONFIG)
+
+
+def test_a_normal_millisecond_timestamp_still_works() -> None:
+    import time
+
+    row = to_row(_message(timestamp=int(time.time() * 1000)), CONFIG)
+
+    assert row["event_time"].year >= 2025

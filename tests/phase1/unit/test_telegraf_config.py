@@ -83,3 +83,14 @@ def test_two_pipelines_render_different_topics() -> None:
     b = tomllib.loads(render_telegraf_config(_config("bbb"), kafka_brokers="kafka:9092"))
 
     assert a["outputs"]["kafka"][0]["topic"] != b["outputs"]["kafka"][0]["topic"]
+
+
+def test_outputs_are_filtered_so_internal_metrics_stay_out_of_the_data() -> None:
+    """Telegraf routes every input to every output. Without namepass, its own
+    internal metrics are published to the pipeline's Kafka topic and land as rows
+    in its ClickHouse table."""
+    cfg = _config()
+    rendered = tomllib.loads(render_telegraf_config(cfg, kafka_brokers="kafka:9092"))
+
+    assert rendered["outputs"]["kafka"][0]["namepass"] == [cfg.topic]
+    assert rendered["outputs"]["prometheus_client"][0]["namedrop"] == [cfg.topic]

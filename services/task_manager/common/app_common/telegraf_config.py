@@ -103,6 +103,7 @@ def render_telegraf_config(
         restart_delay=restart_delay,
         time_format=_TIME_FORMAT,
         measurement=config.topic,
+        measurement_name=_toml(config.topic),
         brokers=_toml([b.strip() for b in kafka_brokers.split(",") if b.strip()]),
         topic=_toml(config.topic),
         METRICS_PORT=METRICS_PORT,

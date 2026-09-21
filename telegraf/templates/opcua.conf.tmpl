@@ -34,7 +34,16 @@
 [[outputs.kafka]]
   brokers = $brokers
   topic = $topic
+  # Telegraf routes every input to every output. Without this, inputs.internal's
+  # own metrics are published to the pipeline's topic and land as rows in its
+  # ClickHouse table — plausible-looking garbage with current timestamps, which
+  # also makes a stalled source look alive.
+  namepass = [$measurement_name]
   data_format = "json"
+  # Telegraf emits timestamps in SECONDS unless told otherwise. The consumer
+  # pool reads them as milliseconds, so without this every record lands with an
+  # event_time near 1970 — silently, since the values themselves are fine.
+  json_timestamp_units = "1ms"
   compression_codec = 0
   required_acks = -1
   max_retry = 3
@@ -46,6 +55,9 @@
   listen = ":$METRICS_PORT"
   metric_version = 2
   path = "/metrics"
+  # Mirror of the kafka output's namepass: only Telegraf's own metrics here,
+  # never the pipeline's data.
+  namedrop = [$measurement_name]
 
 [[inputs.internal]]
   collect_memstats = false
