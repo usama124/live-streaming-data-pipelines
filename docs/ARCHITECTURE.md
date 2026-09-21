@@ -147,11 +147,35 @@ Kubernetes only. Registry #7 stays a deliberate xfail for exactly that reason.
 
 Three layers, not one:
 - **Is it flowing** — Kafka UI + Prometheus (lag, throughput, rows landed)
-- **How stale** — OpenTelemetry tracing, source read → Kafka → ClickHouse insert. Lag alone
-  is measured in messages, not seconds, and misses a stalled source that shows zero lag while
-  data is an hour old.
+- **How stale** — source-time freshness, not lag. Lag is measured in messages, not seconds,
+  and misses a stalled source that shows zero lag while data is an hour old.
 - **What the customer sees** — a per-user health API on our own surface, not Grafana, which
   holds data across every user's pipelines and can never be shown to one user directly.
+
+As built (Phase 4): Kafka UI and Prometheus in `docker-compose.yml`, scrape config and alert
+rules in `monitoring/prometheus/`. Producers are *discovered* rather than listed — they come
+and go per pipeline — by the Docker label `DockerRuntime` already sets.
+
+**Staleness is exported as a timestamp, not an age.** `pipeline_last_event_timestamp_seconds`
+carries the source time of the newest row written; staleness is `time() - that` in PromQL. A
+gauge holding "seconds stale" would stop moving the moment a pipeline stops producing, which
+is exactly when it matters. `PipelineDataStale` alerts on it, and `PipelineDeadLettering` on
+`rate(dlq_rows_total[5m])`.
+
+**Tracing: not built, by decision.** The plan sanctioned a timestamp-based interim if full
+OpenTelemetry slipped, and it was taken deliberately — Telegraf sits mid-path and does not
+propagate trace context, so end-to-end tracing would mean threading a trace id through every
+record and running a collector. Every row already carries `event_time` (source) and
+`ingested_at` (write), so "how stale" and "where did the time go between read and insert" are
+both answerable by query today. Registry #23 is deferred, not silently dropped.
+
+**Two traps this phase surfaced, both of which corrupt data silently:**
+- **Telegraf's JSON output emits timestamps in seconds** unless `json_timestamp_units` says
+  otherwise. Reading them as milliseconds lands every record near 1970 with correct-looking
+  values attached. `to_row` now rejects implausible timestamps rather than storing them.
+- **Telegraf routes every input to every output.** `inputs.internal` without a `namepass` on
+  the Kafka output publishes Telegraf's own metrics into the pipeline's topic and table —
+  which also makes a stalled pipeline look alive.
 
 ---
 

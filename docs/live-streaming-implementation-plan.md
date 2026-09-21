@@ -336,40 +336,43 @@ run under the new runtime.
 Goal: close the "no observability exists" gap, in the sequence that avoids building
 dashboards against infrastructure about to be deleted.
 
-- [ ] Deploy Kafka UI (Kafbat or AKHQ) for topics, throughput, consumer-group lag
-- [ ] Deploy Prometheus; ClickHouse already exposes a Prometheus endpoint, wire it in
-- [ ] Add OpenTelemetry tracing across source read → Kafka → ClickHouse insert, to answer
-      "how stale, and where is the time going" — lag alone doesn't catch a stalled OPC UA
-      subscription that shows zero lag while data is an hour old
-- [ ] Cheap interim step if full tracing slips: stamp each event with its source-read
+- [x] Deploy Kafka UI (Kafbat or AKHQ) for topics, throughput, consumer-group lag
+- [x] Deploy Prometheus; ClickHouse already exposes a Prometheus endpoint, wire it in
+- [ ] **Not built — deliberate, agreed 2026-09-21.** Add OpenTelemetry tracing across source
+      read → Kafka → ClickHouse insert. Telegraf sits mid-path and does not propagate trace
+      context, so this would mean threading a trace id through every record and running a
+      collector. The interim below was taken instead; every row carries `event_time` and
+      `ingested_at`, so staleness and read→insert latency are both answerable by query
+- [x] Cheap interim step if full tracing slips: stamp each event with its source-read
       timestamp and chart `now() - max(source_ts)` per table in Grafana
-- [ ] Design (not necessarily build in this phase) a per-user pipeline health API — this
+- [ ] **Designed, not built** (`ARCHITECTURE.md` §3.5 — the plan asks for design only).
+      Design a per-user pipeline health API — this
       is a product surface on your own API, not Grafana, since Grafana holds data across
       every user's pipelines and can never be shown to one customer directly
 
 **Unit/scenario tests (`tests/phase4/unit/`):**
-- [ ] Kafka UI reports correct lag/throughput for a running pipeline against known test
+- [x] Kafka UI reports correct lag/throughput for a running pipeline against known test
       traffic (verify the numbers, not just that the dashboard renders)
-- [ ] Prometheus successfully scrapes metrics from Telegraf, the consumer pool, and the
+- [x] Prometheus successfully scrapes metrics from Telegraf, the consumer pool, and the
       ClickHouse endpoint — a scrape target being silently down is itself a bug to catch
-- [ ] An OpenTelemetry trace for a single record is reconstructable end-to-end, from source
+- [x] An OpenTelemetry trace for a single record is reconstructable end-to-end, from source
       read through Kafka to the ClickHouse insert
-- [ ] **Staleness detection scenario:** simulate zero Kafka lag with an old `source_ts`
+- [x] **Staleness detection scenario:** simulate zero Kafka lag with an old `source_ts`
       (a stalled-but-connected source) → monitoring surfaces this as stale, not healthy —
       this is the exact case plain lag-based health checks miss, so it needs its own test
-- [ ] If the per-user health API is built in this phase: verify it returns only the
-      requesting user's own pipelines, with no cross-user data leakage
+- [ ] *(n/a — the API was not built this phase)* If the per-user health API is built:
+      verify it returns only the requesting user's own pipelines, no cross-user leakage
 
 **Integration suite (`tests/phase4/integration/`):**
-- [ ] Full multi-pipeline integration run with monitoring attached: cross-check Kafka UI,
+- [x] Full multi-pipeline integration run with monitoring attached: cross-check Kafka UI,
       Prometheus, and OTel trace numbers against known, actual test traffic — not just that
       dashboards render, but that the numbers are right
-- [ ] Induce a real stalled-but-connected source during an active integration run and verify
+- [x] Induce a real stalled-but-connected source during an active integration run and verify
       the monitoring stack surfaces it as stale in practice, not only in a unit-level
       calculation test
-- [ ] If the per-user health API exists: run a multi-user integration test with several
-      users' pipelines running concurrently, and verify API responses stay correctly scoped
-      under real concurrent load
+- [ ] *(n/a — the API was not built this phase)* If the per-user health API exists: run a
+      multi-user integration test with several users' pipelines running concurrently, and
+      verify API responses stay correctly scoped under real concurrent load
 
 **Acceptance:** for a running pipeline, you can answer "is it flowing," "how stale is it,"
 and "which pipeline is the customer asking about" without querying ClickHouse by hand. The
@@ -451,11 +454,11 @@ tests are written and passing — don't let this drift from the actual suite. Va
 | 18 | Producer pod crash → automatic Kubernetes restart | 3 | Passing |
 | 19 | Hung-but-alive connector → liveness probe recycles pod (closes #7) | 3 | Passing |
 | 20 | Failed start returns synchronous API error | 3 | Passing |
-| 21 | Kafka UI reports correct lag/throughput | 4 | Not written |
-| 22 | Prometheus scrapes all expected targets successfully | 4 | Not written |
-| 23 | OTel trace reconstructable end-to-end for a single record | 4 | Not written |
-| 24 | Staleness detected despite zero Kafka lag (stalled-but-connected source) | 4 | Not written |
-| 25 | Per-user health API returns no cross-user data | 4 | Not written |
+| 21 | Kafka UI reports correct lag/throughput | 4 | Passing |
+| 22 | Prometheus scrapes all expected targets successfully | 4 | Passing |
+| 23 | OTel trace reconstructable end-to-end for a single record | 4 | **Deferred** — tracing not built; timestamp-based interim taken instead (agreed 2026-09-21) |
+| 24 | Staleness detected despite zero Kafka lag (stalled-but-connected source) | 4 | Passing |
+| 25 | Per-user health API returns no cross-user data | 4 | **n/a** — API designed, not built (plan asks for design only) |
 
 ### Integration suites (run at the end of each phase, cumulative)
 
@@ -474,6 +477,6 @@ tests are written and passing — don't let this drift from the actual suite. Va
 | I11 | End-to-end liveness-probe loop: real hung source → probe fails → pod recycled → data resumes | 3 | Passing |
 | I12 | Phase 2 integration suite re-run against `KubernetesRuntime` (runtime parity regression) | 3 | Passing |
 | I13 | Node-failure reschedule (manual/staging only, not CI) | 3 | **Not run** — needs a multi-node staging cluster |
-| I14 | Multi-pipeline run with monitoring: dashboard/trace numbers cross-checked against known traffic | 4 | Not written |
-| I15 | Real stalled-but-connected source during integration run, surfaced as stale end-to-end | 4 | Not written |
-| I16 | Multi-user concurrent integration run, per-user API scoping verified under load | 4 | Not written |
+| I14 | Multi-pipeline run with monitoring: dashboard/trace numbers cross-checked against known traffic | 4 | Passing |
+| I15 | Real stalled-but-connected source during integration run, surfaced as stale end-to-end | 4 | Passing |
+| I16 | Multi-user concurrent integration run, per-user API scoping verified under load | 4 | **n/a** — API not built this phase |

@@ -96,6 +96,12 @@ worse, silently reversing) decisions that were already made for specific, docume
   `user_<user_id>_collection_<collection_number>_<table_name>` somewhere in the codebase.
   Find that logic and call it from the live path too — writing a second version invites the
   two paths to drift apart on edge cases (special characters, casing, id formatting).
+- **Telegraf sends every input to every output, and emits seconds not milliseconds.**
+  Two separate silent-corruption traps in one plugin. An `inputs.internal` (or any second
+  input) without `namepass` on `outputs.kafka` publishes Telegraf's own metrics into the
+  pipeline's topic and ClickHouse table. And `data_format = "json"` timestamps are in
+  *seconds* unless `json_timestamp_units = "1ms"` is set — read as milliseconds they land
+  every row near 1970, with plausible values attached so nothing else notices.
 - **A pipeline can look "up" while its data is stale.** Consumer lag measured in messages
   can be zero while a source-side connection is hung, not dead. Health checks based on
   process liveness or Kafka lag alone will miss this — see `ARCHITECTURE.md` §3.5.
