@@ -105,6 +105,9 @@ tests/
   phase4/
     unit/
     integration/
+  phase5/
+    unit/
+    integration/
 ```
 
 A known, accepted gap (e.g., Phase 1's Telegraf-can't-detect-a-silent-hang gap) still gets a
@@ -380,6 +383,106 @@ Phase 4 integration suite passes.
 
 ---
 
+## Phase 5 — Fail-safe: terminal failure detection and a single failure chokepoint
+
+Goal: a pipeline that can never succeed ends `FAILED`, with the reason recorded and its
+producer stopped — instead of restart-looping forever while reporting `RUNNING`. One place
+decides a failure is terminal, one place writes it, one place logs it.
+
+**Why this is needed, concretely.** Every one of the existing `status=FAILED` writes is
+control-plane, at the moment of an API or controller action. Nothing that happens *while a
+pipeline runs* can mark it failed: the consumer pool holds a repository but only ever reads
+config, and the producer has had no Redis access since Phase 1. There is also no restart
+budget anywhere, and Kubernetes has no give-up semantics for Deployments (`backoffLimit` is
+Jobs-only), so a connector pointed at a bad endpoint restarts forever while the API reports
+`RUNNING`. A permanently broken pipeline that looks healthy is the worst failure mode in the
+system, because nobody investigates it.
+
+**Decisions settled 2026-09-22 (Kamran), before any code:**
+
+| | |
+|---|---|
+| Permanent fault | A *sustained* failure, never an isolated one |
+| Schema divergence | ≥95% of records dead-lettered over a 5-minute window |
+| Dead producer | 5 restarts in 10 minutes having emitted zero records |
+| Kafka/ClickHouse outage | **Not a failure.** Pipelines stay `RUNNING`, the pool keeps retrying, and the outage is *reported* rather than acted on |
+| Blast radius | Stop only that pipeline's producer; the pool and every other pipeline keep running |
+| Recovery | Manual, through the existing restart endpoint |
+
+**Why an outage must not fail pipelines.** Kafka is the buffer. If ClickHouse is down for
+twenty minutes and producers keep running, the readings sit in Kafka and drain on recovery —
+nothing is lost. Stopping producers would discard those twenty minutes permanently, since
+OPC UA does not backfill. Note also that an outage produces *zero* dead letters by design
+(infrastructure errors are transient: the insert raises, offsets stay uncommitted, the batch
+is re-read), so the 95% rule cannot fire on one even in principle.
+
+- [ ] `common/app_common/failures.py` — `FailureClass` (`TRANSIENT` / `PERMANENT`),
+      `PipelineFailure(pipeline_id, component, reason, detail, failure_class)`, and
+      `fail_pipeline()` as the **only** code permitted to write `status=FAILED`. It logs one
+      structured line, sets `status=FAILED` **and** `desired_state=STOPPED`, calls
+      `runtime.stop_live_pipeline`, and publishes a state event
+- [ ] **Default every unrecognised error to `TRANSIENT`** — same fail-safe default as the
+      dead-letter classifier. Wrongly calling something permanent stops a working pipeline;
+      wrongly calling it transient merely retries
+- [ ] Collapse the nine existing `update_state(..., status=PipelineStatus.FAILED)` sites
+      (task_manager, controller, watchdog) onto `fail_pipeline()`
+- [ ] **Fix the control-plane restart loop:** `controller/app/main.py`'s `_IDLE` contains
+      `FAILED`, so a pipeline marked failed while `desired_state=RUNNING` is restarted within
+      3s. `fail_pipeline` setting `desired_state=STOPPED` closes it; dropping `FAILED` from
+      `_IDLE` is the defence in depth
+- [ ] Consumer pool writes per-pipeline write-health into `PipelineState` — taking over
+      `last_heartbeat_at`, which has been written by nothing since Phase 2 deleted the
+      per-pipeline consumer, plus `last_write_error`. **Throttle to at most one Redis write
+      per pipeline per ~10s**; writing per batch would hammer Redis at batch rates
+- [ ] Pool-side detector: rolling 5-minute dead-letter ratio per pipeline. ≥95% with a
+      minimum sample (≥50 records, so a few bad records at startup cannot trip it) →
+      `PERMANENT`
+- [ ] Add `RuntimeAdapter.health(pipeline_id) -> RuntimeHealth(restarts, running, since)` —
+      a 6th interface method, implemented for both `DockerRuntime` and `KubernetesRuntime`
+- [ ] Supervisor loop in `task_manager`: for each `desired_state=RUNNING` pipeline, apply the
+      restart budget (5 restarts in 10 minutes with zero records emitted) → `PERMANENT`.
+      **This is not the Phase 3 controller returning** — it reconciles nothing; it adjudicates
+      failure, which Kubernetes genuinely does not do. Record that in the decision memo so a
+      later reader does not "simplify" it away
+- [ ] Outage reporting: `consumer_pool_write_errors_total{pipeline_id}` counter, Prometheus
+      alerts on `up{job=~"clickhouse|kafka"} == 0` and on sustained write errors. Admins see
+      the alert; users see `last_heartbeat_at` going stale on `GET /pipelines/{id}/status`
+- [ ] Manual recovery: `POST /pipelines/{id}/restart` on a `FAILED` pipeline clears
+      `last_error` and resumes. Fixing the underlying cause first is the operator's job —
+      document that, and do not auto-clear on a schedule
+- [ ] **Known limitation to note in code, not build for:** the pool runs multiple replicas and
+      each owns different partitions. With single-partition topics one replica sees a whole
+      pipeline, so a per-replica ratio is correct. If pipelines ever get multiple partitions,
+      two replicas could each see 50% of a diverged stream and neither would independently
+      cross 95%
+
+**Unit/scenario tests (`tests/phase5/unit/`):**
+- [ ] Sustained ≥95% dead-letter rate → pipeline `FAILED`, its producer stopped
+- [ ] **Invariant regression guard:** isolated bad records (~0.1%) do *not* fail the
+      pipeline — the dead-letter table absorbs them, exactly as Phase 2 intended
+- [ ] Connector that can never connect → 5 restarts in 10 minutes → `FAILED`, producer stopped
+- [ ] ClickHouse unreachable → **nothing** marked failed, no dead letters written, offsets
+      left uncommitted
+- [ ] `fail_pipeline()` is the only writer of `FAILED`, and sets `desired_state=STOPPED` so
+      the controller cannot restart what it just stopped
+- [ ] Restarting a `FAILED` pipeline through the API clears the failure and resumes
+
+**Integration suite (`tests/phase5/integration/`):**
+- [ ] Real schema divergence end to end → that pipeline ends `FAILED` and stopped, while a
+      neighbouring pipeline on the same pool keeps flowing untouched
+- [ ] Real ClickHouse outage under multi-pipeline load → nothing fails, producers keep filling
+      Kafka, data drains on recovery with no loss beyond at-least-once
+- [ ] Full recovery loop: break a pipeline, observe `FAILED`, fix the cause, restart through
+      the API, confirm data flows again
+
+**Acceptance:** a pipeline whose declared schema has diverged from its source ends `FAILED`
+with the reason recorded and its producer stopped, while every other pipeline is unaffected.
+A Kafka or ClickHouse outage fails nothing and self-heals, while being visible in both
+Prometheus and the API. A failed pipeline recovers through the normal restart endpoint. The
+Phase 5 integration suite passes.
+
+---
+
 ## Cross-cutting items — resolve alongside the phase they block
 
 | Item | Blocks | Status |
@@ -388,15 +491,21 @@ Phase 4 integration suite passes.
 | Dead-letter design spec | Phase 2 | **Resolved 2026-09-21.** Spec written: Proposal E (reasoning), `ARCHITECTURE.md` §3.3.1 (contract) |
 | ~~`tenant_id`~~ `ch_unique_identifier` | Phase 2 | **Resolved.** No separate `tenant_id` — ownership is `user_<user_id>_collection_<collection_number>_<table_name>`. The live path generates it with its own function, `common/app_common/ch_naming.py`; batch builds the same shape inline in another repo, so the format is a cross-repo contract pinned by tests. See `ARCHITECTURE.md` §4. |
 | Sequencing vs. Stratahub merge | All phases | **Resolved 2026-09-21.** Proposal G: standalone through Phase 4, then one merge PR |
-| Liveness probe thresholds | Phase 3 | **Open — the only one left.** Needs a measured number per source type, not a guess; depends on each source's real publishing interval |
+| Fail-safe thresholds (95%/5min, 5 restarts/10min) | Phase 5 | **Decided 2026-09-22**, but like the liveness threshold these are desk numbers. Confirm against real traffic before rollout |
+| Liveness probe thresholds | Phase 3 | **Open.** Needs a measured number per source type, not a guess; depends on each source's real publishing interval |
 
 ---
 
 ## Rollout order (recap)
 
-**Phase 0 → Phase 1 → Phase 2 → Phase 3 → Phase 4**, with Phase 3's controller/watchdog/
-leader-lock deletion gated on staging proof, and Phase 4 sequenced after Phase 2 specifically
-so dashboards aren't built against a consumer pool that's mid-migration.
+**Phase 0 → Phase 1 → Phase 2 → Phase 3 → Phase 4 → Phase 5**, with Phase 3's
+controller/watchdog/leader-lock deletion gated on staging proof, and Phase 4 sequenced after
+Phase 2 specifically so dashboards aren't built against a consumer pool that's mid-migration.
+
+Phase 5 comes last deliberately: its dead-letter-rate detector needs Phase 2's dead-letter
+path, its restart-budget detector needs Phase 3's runtime adapter, and its outage reporting
+builds on Phase 4's metrics. Attempting it earlier means building detectors against signals
+that do not exist yet.
 
 Do not parallelize Phase 3 ahead of Phase 1/2 — the liveness probe in Phase 3 is the
 documented backstop for a gap Phase 1 knowingly leaves open. Shipping orchestration without
@@ -459,6 +568,12 @@ tests are written and passing — don't let this drift from the actual suite. Va
 | 23 | OTel trace reconstructable end-to-end for a single record | 4 | **Deferred** — tracing not built; timestamp-based interim taken instead (agreed 2026-09-21) |
 | 24 | Staleness detected despite zero Kafka lag (stalled-but-connected source) | 4 | Passing |
 | 25 | Per-user health API returns no cross-user data | 4 | **n/a** — API designed, not built (plan asks for design only) |
+| 26 | Sustained ≥95% dead-letter rate → pipeline FAILED, producer stopped | 5 | Not written |
+| 27 | Isolated bad records do NOT fail the pipeline (invariant regression guard) | 5 | Not written |
+| 28 | Connector that never connects → restart budget exhausted → FAILED, stopped | 5 | Not written |
+| 29 | ClickHouse/Kafka outage fails nothing, no dead letters, offsets uncommitted | 5 | Not written |
+| 30 | `fail_pipeline()` is the only FAILED writer, and stops the controller restarting it | 5 | Not written |
+| 31 | Restarting a FAILED pipeline clears the failure and resumes | 5 | Not written |
 
 ### Integration suites (run at the end of each phase, cumulative)
 
@@ -480,3 +595,6 @@ tests are written and passing — don't let this drift from the actual suite. Va
 | I14 | Multi-pipeline run with monitoring: dashboard/trace numbers cross-checked against known traffic | 4 | Passing |
 | I15 | Real stalled-but-connected source during integration run, surfaced as stale end-to-end | 4 | Passing |
 | I16 | Multi-user concurrent integration run, per-user API scoping verified under load | 4 | **n/a** — API not built this phase |
+| I17 | Real schema divergence → that pipeline FAILED and stopped, neighbour keeps flowing | 5 | Not written |
+| I18 | Real ClickHouse outage under load → nothing fails, data drains on recovery | 5 | Not written |
+| I19 | Full recovery loop: break → FAILED → fix → restart via API → flowing again | 5 | Not written |
