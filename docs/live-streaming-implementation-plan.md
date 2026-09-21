@@ -118,16 +118,16 @@ cumulative registry, scenario and integration tests together.
 
 Goal: a clean checkout works before any architectural change lands on top of it.
 
-- [ ] Fix root `docker-compose.yml`: correct Dockerfile path, add `clickhouse/init.sql`
-- [ ] Remove the hardcoded `/home/usama/Videos/...` volume mount
-- [ ] Fix `.env` files pinning the dead `172.22.0.1` network
-- [ ] Add `DOCKER_NETWORK` creation to Compose (or the setup script), not just a reference to it
-- [ ] Add `.env.example` for the `task_manager` stack
-- [ ] Delete `airflow_client.py` stub
-- [ ] Rewrite `README.md` to match the current split layout
+- [x] Fix root `docker-compose.yml`: correct Dockerfile path, add `clickhouse/init.sql`
+- [x] Remove the hardcoded `/home/usama/Videos/...` volume mount
+- [x] Fix `.env` files pinning the dead `172.22.0.1` network
+- [x] Add `DOCKER_NETWORK` creation to Compose (or the setup script), not just a reference to it
+- [x] Add `.env.example` for the `task_manager` stack
+- [x] Delete `airflow_client.py` stub
+- [x] Rewrite `README.md` to match the current split layout
 
 **Integration suite (`tests/phase0/integration/`):**
-- [ ] Clean-checkout smoke test: `docker compose up` succeeds with no manual fixes, on CI,
+- [x] Clean-checkout smoke test: `docker compose up` succeeds with no manual fixes, on CI,
       from a fresh clone. There's nothing else to integrate yet — this phase's "integration
       test" is just proving the foundation boots.
 
@@ -413,7 +413,7 @@ tests are written and passing — don't let this drift from the actual suite. Va
 
 | # | Scenario | Phase | Status |
 |---|---|---|---|
-| 1 | Clean-checkout smoke test (`docker compose up`) | 0 | Not written |
+| 1 | Clean-checkout smoke test (`docker compose up`) | 0 | Passing |
 | 2 | Connector emits well-formed records against a healthy source | 1 | Not written |
 | 3 | Telegraf forwards records to the correct topic, no cross-pipeline leakage | 1 | Not written |
 | 4 | Connector subprocess crash → Telegraf restarts it | 1 | Not written |
@@ -443,7 +443,7 @@ tests are written and passing — don't let this drift from the actual suite. Va
 
 | # | Scenario | Phase | Status |
 |---|---|---|---|
-| I1 | Clean-checkout boot (foundation for everything below) | 0 | Not written |
+| I1 | Clean-checkout boot (foundation for everything below) | 0 | Passing |
 | I2 | Real/mock source → Telegraf → Kafka, values verified against known source data | 1 | Not written |
 | I3 | Multiple concurrent Telegraf instances, topic isolation under real concurrent load | 1 | Not written |
 | I4 | Full producer lifecycle via real API: create → sustained data flow → stop → teardown verified | 1 | Not written |
