@@ -1,0 +1,123 @@
+# Architecture — Live Streaming Module (Target Design)
+
+This document describes the system being built, not a legacy system being replaced. If code
+in the repo disagrees with this document, either the code is mid-migration (check the
+implementation plan's phase status) or this document is stale — flag it, don't silently
+follow the code.
+
+Batch/normal pipelines are out of scope. They run as Airflow DAGs elsewhere.
+
+---
+
+## 1. Why live pipelines can't be Airflow DAGs
+
+Airflow orchestrates runs that terminate. A live pipeline never finishes, so a task blocking
+forever breaks scheduler heartbeats, slot accounting, zombie detection, and retries. The
+submit-and-exit alternative supervises nothing once it exits. This is why live pipelines get
+their own control plane instead of reusing Airflow's.
+
+---
+
+## 2. Data and control path
+
+```
+POST /{id}/start
+  → Kubernetes Deployment created for the pipeline (replicas: 1)
+    → Telegraf pod: our source connector (execd subprocess) → Kafka topic pipeline.<id>.events
+  → shared consumer pool (regex-subscribed to pipeline.*.events)
+    → batched insert → ClickHouse table (one per pipeline)
+
+POST /{id}/stop
+  → Deployment scaled to replicas: 0
+```
+
+No Redis, no polling loop, no separate reconciler. Kubernetes' own control loop
+(`kube-controller-manager`) reconciles `replicas` against actual pod state.
+
+---
+
+## 3. Components
+
+| Component | Cardinality | Owns | Does not own |
+|---|---|---|---|
+| Task Manager (API) | Shared, horizontally scaled | Pipeline CRUD, calls the Kubernetes API to create/scale/delete Deployments | Any lifecycle polling — Kubernetes owns that |
+| Producer (Telegraf + connector) | 1 per pipeline | Source connection, emitting records to stdout | Kafka delivery, retry/backoff, metrics — Telegraf owns those |
+| Consumer pool | Shared, few replicas | Kafka→ClickHouse batching, dead-letter handling, per-pipeline table writes | Any per-pipeline process or state — it's stateless across pipelines |
+| Kubernetes | N/A (the platform) | Restart-on-crash (`restartPolicy: Always`), scheduling, host-failure recovery | Reconnect-to-source logic — that's the connector's job |
+
+### 3.1 Producer
+
+Telegraf (`inputs.execd`) launches our source connector as a long-lived subprocess. The
+connector's only job: connect to the source, emit one record per line to stdout. Telegraf
+owns everything downstream — batching, the Kafka producer, retry/backoff, Prometheus metrics.
+
+Standard protocols (MQTT) use Telegraf's native input directly — no custom connector needed.
+Proprietary/industrial sources (OPC UA now, AVEVA planned) get a thin connector script.
+
+**Known gap:** Telegraf restarts the subprocess only if it exits. A silently-dead source
+session (process alive, no data) is not detected by Telegraf. This is covered by the
+Kubernetes liveness probe (§3.4), not by Telegraf itself — do not treat a connector as
+production-ready without it.
+
+### 3.2 Consumer pool
+
+aiokafka, subscribed to `pipeline.*.events` by pattern — not a fixed topic list. A new
+pipeline's topic is picked up within `metadata_max_age_ms` with no restart of the pool.
+This is mandatory: customers create pipelines at times outside our control, and no design
+may restart shared infrastructure on pipeline creation.
+
+Core loop: `getmany()` → accumulate per topic → **insert, then commit** (in that order, so a
+crash mid-batch re-reads rather than drops rows). Topic name maps to ClickHouse table name.
+
+**Dead-letter handling lives inside this write path.** No exception may escape it — one bad
+record must not stall every other pipeline sharing the pool.
+
+### 3.3 ClickHouse tables
+
+One table per pipeline, created explicitly from a declared schema at pipeline-creation time
+— **never inferred from the first event seen**. Inferring from the first event is how two
+pipelines with different field sets collide on a shared or ambiguous table; it must not
+happen in this design.
+
+### 3.4 Orchestration
+
+Kubernetes Deployments. `desired_state` ≡ replica count. A liveness probe on the producer
+pod fails when the last successful source read exceeds a threshold (tuned per source type),
+so kubelet recycles a hung-but-alive pod — this is the backstop for §3.1's Telegraf gap.
+
+A failed start returns an error to the API caller directly, rather than surfacing on a later
+poll — there is no poll; there is no controller loop to poll on.
+
+### 3.5 Monitoring
+
+Three layers, not one:
+- **Is it flowing** — Kafka UI + Prometheus (lag, throughput, rows landed)
+- **How stale** — OpenTelemetry tracing, source read → Kafka → ClickHouse insert. Lag alone
+  is measured in messages, not seconds, and misses a stalled source that shows zero lag while
+  data is an hour old.
+- **What the customer sees** — a per-tenant health API on our own surface, not Grafana, which
+  holds cross-tenant data that can never be shown to a tenant directly.
+
+---
+
+## 4. Config contract
+
+- `PipelineConfig` must include an explicit table field — do not rely on a global
+  `CLICKHOUSE_TABLE` setting shared across pipelines.
+- `tenant_id` must be part of the schema from the start. Retrofitting it after per-pipeline
+  tables exist is more expensive than designing it in now — see `BACKLOG.md`.
+- Kafka topic naming: `pipeline.<id>.events`, matched by the consumer pool's subscription
+  pattern `pipeline.*.events`.
+
+---
+
+## 5. Explicitly not built here
+
+- Apache Flink or any stateful/windowed stream processing — evaluated, not adopted. The
+  consumer pool does no transformation by design; revisit only if that changes. See the
+  decision memo's alternatives section.
+- Per-record lineage / Apache NiFi — open question, unresolved, tracked in `BACKLOG.md`.
+  A bigger architectural swing that should be settled independently before it affects
+  anything above.
+- AVEVA and MQTT connectors — the pattern supports them (§3.1), building them is follow-on
+  work, tracked in `BACKLOG.md`.

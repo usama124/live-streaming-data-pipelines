@@ -70,8 +70,8 @@ services:
 
   task-manager:
     build:
-      context: .
-      dockerfile: services/task_manager/Dockerfile
+      context: services/task_manager
+      dockerfile: task_manager/Dockerfile
     image: data-platform-task-manager:latest
     container_name: task-manager
     ports:
