@@ -1,0 +1,40 @@
+# Per-pipeline Telegraf config, rendered by task_manager at pipeline-create time.
+# Do not edit a rendered copy — edit this template.
+#
+# Placeholders are substituted by common/app_common/telegraf_config.py, which
+# pre-quotes every value as a TOML basic string. Keep placeholders unquoted here.
+
+[agent]
+  interval = "$interval"
+  flush_interval = "$flush_interval"
+  metric_batch_size = $metric_batch_size
+  metric_buffer_limit = $metric_buffer_limit
+  omit_hostname = true
+
+# execd, not exec: the connector holds an open OPC UA subscription and streams.
+# exec would run it on a schedule and silently miss everything between runs.
+[[inputs.execd]]
+  command = $command
+  environment = $environment
+  # The connector exits on any connection or session failure by design; this is
+  # what brings it back, and it is what replaces the watchdog's restart.
+  restart_delay = "$restart_delay"
+  signal = "none"
+
+  data_format = "json"
+  json_time_key = "event_time"
+  json_time_format = "$time_format"
+  tag_keys = ["pipeline_id", "sensor", "source", "quality", "node_id"]
+  # "value" is listed so a non-numeric reading (MachineStatus = "RUNNING") is
+  # kept as a string field. Without it Telegraf's JSON parser silently drops
+  # every non-numeric value.
+  json_string_fields = ["value"]
+  name_override = "$measurement"
+
+[[outputs.kafka]]
+  brokers = $brokers
+  topic = $topic
+  data_format = "json"
+  compression_codec = 0
+  required_acks = -1
+  max_retry = 3

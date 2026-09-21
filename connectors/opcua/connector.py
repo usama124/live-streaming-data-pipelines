@@ -18,6 +18,9 @@ Config, all from the environment:
     OPCUA_NODE_NAMES_JSON         optional {"ns=2;i=2": "Temperature"} mapping
     OPCUA_PUBLISHING_INTERVAL_MS  server publish interval (default 500)
     OPCUA_CONNECTION_CHECK_S      liveness poll interval (default 5)
+    OPCUA_CONNECT_TIMEOUT_S       handshake/request timeout (default 4). Raise it
+                                  for a slow industrial link — a server that
+                                  accepts TCP but answers slowly is common.
 """
 
 from __future__ import annotations
@@ -100,11 +103,14 @@ def _config() -> dict[str, Any]:
         "node_names": node_names,
         "publishing_interval_ms": int(os.getenv("OPCUA_PUBLISHING_INTERVAL_MS", "500")),
         "connection_check_s": float(os.getenv("OPCUA_CONNECTION_CHECK_S", "5")),
+        "connect_timeout_s": float(os.getenv("OPCUA_CONNECT_TIMEOUT_S", "4")),
     }
 
 
 async def run(cfg: dict[str, Any]) -> None:
-    client = Client(url=cfg["endpoint"])
+    # timeout bounds the handshake: without it, an endpoint that accepts TCP and
+    # then says nothing leaves this process alive and silent forever.
+    client = Client(url=cfg["endpoint"], timeout=cfg["connect_timeout_s"])
     await client.connect()
     logger.info("connected to %s", cfg["endpoint"])
 
