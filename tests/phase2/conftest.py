@@ -116,3 +116,58 @@ def telegraf_message(pipeline_id: str, *, sensor: str = "temperature",
                  "quality": "good", "node_id": "ns=2;i=2"},
         "fields": {"value": value, "sequence": sequence},
     }
+
+
+@pytest.fixture(scope="session")
+def platform(infra, pool_image):
+    """API, controller and the pool, all real."""
+    _compose("up", "-d", "--build", "--wait", "task-manager", "controller")
+    _compose("up", "-d", "--build", "consumer-pool")
+
+    import urllib.request
+
+    deadline = time.time() + 120
+    while time.time() < deadline:
+        try:
+            with urllib.request.urlopen("http://localhost:8000/health", timeout=5) as r:
+                if json.load(r)["status"] == "ok":
+                    break
+        except Exception:
+            time.sleep(2)
+    else:
+        raise AssertionError("task-manager never became healthy")
+    yield
+
+
+def create_pipeline(pipeline_id: str, *, user_id: str = "1", collection_number: int = 1,
+                    table_name: str = "events", table_schema: dict | None = None) -> dict:
+    """Create through the real API, which also provisions the topic and table."""
+    import requests
+
+    body = {
+        "pipeline_id": pipeline_id,
+        "pipeline_type": "live",
+        "source_type": "opcua",
+        "topic": f"pipeline.{pipeline_id}.events",
+        "user_id": user_id,
+        "collection_number": collection_number,
+        "table_name": table_name,
+        "source_options": {"endpoint": "opc.tcp://unused:4840/", "node_ids": ["ns=2;i=2"]},
+    }
+    if table_schema:
+        body["table_schema"] = table_schema
+    response = requests.post("http://localhost:8000/pipelines", json=body, timeout=60)
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+def restart_pool() -> None:
+    _compose("restart", "consumer-pool")
+
+
+def pool_logs(tail: int = 200) -> str:
+    return _compose("logs", "--tail", str(tail), "consumer-pool", check=False).stdout
+
+
+def dlq_count(pipeline_id: str) -> int:
+    return ch_count("dead_letter_events", f"pipeline_id = '{pipeline_id}'")
