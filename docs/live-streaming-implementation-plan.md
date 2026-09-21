@@ -209,12 +209,15 @@ Goal: one shared, regex-subscribed consumer pool replaces Quix Streams and the s
       that order** (insert before commit, so a crash mid-batch re-reads rather than drops)
 - [ ] Fix the schema-collision bug at the root: stop inferring columns from the first event
       (`ClickHouseSink._ensure_table()`'s current behavior) and instead create the table from
-      an explicit per-pipeline schema at pipeline-creation time, keyed by topic name → table
-      name (not the current global `CLICKHOUSE_TABLE` setting in `docker_runtime.py:94`)
-- [ ] Add `PipelineConfig.table` and `PipelineConfig.tenant_id` (both currently absent).
-      Table naming is `user_<user_id>_collection_<collection_number>_<table_name>`, with
-      `table_name` validated against `^[a-z_][a-z0-9_]*$` at creation time — it reaches
-      ClickHouse as an identifier, so that check is a trust boundary, not formatting
+      an explicit per-pipeline schema at pipeline-creation time (not the current global
+      `CLICKHOUSE_TABLE` setting in `docker_runtime.py:94`)
+- [ ] Add `PipelineConfig.user_id`, `PipelineConfig.collection_number`,
+      `PipelineConfig.table_name` (currently absent). The actual ClickHouse table is
+      `ch_unique_identifier = f"user_{user_id}_collection_{collection_number}_{table_name}"`
+      — **locate the function normal (batch) pipelines already use to generate this and call
+      it from the live path**, do not write a second implementation. The consumer pool
+      resolves topic → `PipelineConfig` → `ch_unique_identifier` to pick the write target;
+      Kafka topic naming (`pipeline.<id>.events`) stays a separate, internal identifier
 - [ ] **Implement dead-letter handling before this ships**, not after: no exception may
       escape the write path, since one bad record must not stall every other pipeline
       sharing the pool. The spec is written — Proposal E in the decision memo for the
@@ -336,9 +339,9 @@ dashboards against infrastructure about to be deleted.
       subscription that shows zero lag while data is an hour old
 - [ ] Cheap interim step if full tracing slips: stamp each event with its source-read
       timestamp and chart `now() - max(source_ts)` per table in Grafana
-- [ ] Design (not necessarily build in this phase) a per-tenant pipeline health API — this
-      is a product surface on your own API, not Grafana, since Grafana holds cross-tenant
-      data that can never be shown to a customer directly
+- [ ] Design (not necessarily build in this phase) a per-user pipeline health API — this
+      is a product surface on your own API, not Grafana, since Grafana holds data across
+      every user's pipelines and can never be shown to one customer directly
 
 **Unit/scenario tests (`tests/phase4/unit/`):**
 - [ ] Kafka UI reports correct lag/throughput for a running pipeline against known test
@@ -350,8 +353,8 @@ dashboards against infrastructure about to be deleted.
 - [ ] **Staleness detection scenario:** simulate zero Kafka lag with an old `source_ts`
       (a stalled-but-connected source) → monitoring surfaces this as stale, not healthy —
       this is the exact case plain lag-based health checks miss, so it needs its own test
-- [ ] If the per-tenant health API is built in this phase: verify it returns only the
-      requesting tenant's pipelines, with no cross-tenant data leakage
+- [ ] If the per-user health API is built in this phase: verify it returns only the
+      requesting user's own pipelines, with no cross-user data leakage
 
 **Integration suite (`tests/phase4/integration/`):**
 - [ ] Full multi-pipeline integration run with monitoring attached: cross-check Kafka UI,
@@ -360,8 +363,8 @@ dashboards against infrastructure about to be deleted.
 - [ ] Induce a real stalled-but-connected source during an active integration run and verify
       the monitoring stack surfaces it as stale in practice, not only in a unit-level
       calculation test
-- [ ] If the per-tenant health API exists: run a multi-tenant integration test with several
-      tenants' pipelines running concurrently, and verify API responses stay correctly scoped
+- [ ] If the per-user health API exists: run a multi-user integration test with several
+      users' pipelines running concurrently, and verify API responses stay correctly scoped
       under real concurrent load
 
 **Acceptance:** for a running pipeline, you can answer "is it flowing," "how stale is it,"
@@ -376,7 +379,7 @@ Phase 4 integration suite passes.
 |---|---|---|
 | Telegraf MIT license | Phase 1 | **Resolved 2026-09-21.** MIT confirmed. Remaining work is attribution, not a decision — see Proposal A and the Phase 1 task below |
 | Dead-letter design spec | Phase 2 | **Resolved 2026-09-21.** Spec written: Proposal E (reasoning), `ARCHITECTURE.md` §3.3.1 (contract) |
-| `tenant_id` | Phase 2 (table-per-topic design) | **Resolved 2026-09-21.** Proposal F: `user_<user_id>_collection_<collection_number>_<table_name>`, `tenant_id` also an explicit column |
+| ~~`tenant_id`~~ `ch_unique_identifier` | Phase 2 | **Resolved.** No separate `tenant_id` — live pipelines reuse the existing `user_<user_id>_collection_<collection_number>_<table_name>` naming that normal pipelines already generate. Locate and call the shared function; don't reimplement it. See `ARCHITECTURE.md` §4. |
 | Sequencing vs. Stratahub merge | All phases | **Resolved 2026-09-21.** Proposal G: standalone through Phase 4, then one merge PR |
 | Liveness probe thresholds | Phase 3 | **Open — the only one left.** Needs a measured number per source type, not a guess; depends on each source's real publishing interval |
 
@@ -448,7 +451,7 @@ tests are written and passing — don't let this drift from the actual suite. Va
 | 22 | Prometheus scrapes all expected targets successfully | 4 | Not written |
 | 23 | OTel trace reconstructable end-to-end for a single record | 4 | Not written |
 | 24 | Staleness detected despite zero Kafka lag (stalled-but-connected source) | 4 | Not written |
-| 25 | Per-tenant health API returns no cross-tenant data | 4 | Not written |
+| 25 | Per-user health API returns no cross-user data | 4 | Not written |
 
 ### Integration suites (run at the end of each phase, cumulative)
 
@@ -469,4 +472,4 @@ tests are written and passing — don't let this drift from the actual suite. Va
 | I13 | Node-failure reschedule (manual/staging only, not CI) | 3 | Not written |
 | I14 | Multi-pipeline run with monitoring: dashboard/trace numbers cross-checked against known traffic | 4 | Not written |
 | I15 | Real stalled-but-connected source during integration run, surfaced as stale end-to-end | 4 | Not written |
-| I16 | Multi-tenant concurrent integration run, per-tenant API scoping verified under load | 4 | Not written |
+| I16 | Multi-user concurrent integration run, per-user API scoping verified under load | 4 | Not written |
