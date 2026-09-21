@@ -220,14 +220,15 @@ class Container:
                 pass
 
 
-def mock_server_container(name: str) -> Container:
+def mock_server_container(name: str, freeze_after_s: float = 0.0) -> Container:
     """The mock OPC UA server, from the producer image (it already has asyncua)."""
     return Container(
         PRODUCER_IMAGE, name,
         entrypoint=["python3", "-m", "connectors.opcua.mock_server"],
         working_dir="/opt",
         environment={"OPCUA_SERVER_PORT": "4840", "PYTHONPATH": "/opt",
-                     "OPCUA_STATUS_EVERY": "2"},
+                     "OPCUA_STATUS_EVERY": "2",
+                     "OPCUA_FREEZE_AFTER_S": str(freeze_after_s)},
     )
 
 

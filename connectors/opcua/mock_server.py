@@ -37,12 +37,16 @@ class MockOpcUaServer:
     STATUSES = ["RUNNING", "IDLE", "MAINTENANCE", "ERROR"]
 
     def __init__(self, host: str = "0.0.0.0", port: int = 4840,  # noqa: S104
-                 status_every: int = 50) -> None:
+                 status_every: int = 50, freeze_after_s: float = 0.0) -> None:
         self._endpoint = f"opc.tcp://{host}:{port}/stratahub/server/"
         # How often MachineStatus (the one *string* node) changes. Tests turn
         # this down: a string value is what Telegraf's JSON parser drops when
         # json_string_fields is wrong, so it needs to be cheap to provoke.
         self._status_every = status_every
+        # Stop updating values after N seconds while keeping the session open —
+        # the "connected but stalled" source. Telegraf cannot see this, which is
+        # what the Phase 3 liveness probe exists to catch. 0 disables it.
+        self._freeze_after_s = freeze_after_s
         self._nodes: dict[str, Any] = {}
         self._running = False
 
@@ -75,7 +79,13 @@ class MockOpcUaServer:
 
     async def _simulate(self) -> None:
         t = 0
+        started = asyncio.get_running_loop().time()
         while self._running:
+            if self._freeze_after_s and (
+                asyncio.get_running_loop().time() - started > self._freeze_after_s
+            ):
+                logger.warning("simulation frozen — session stays open, values stop changing")
+                return
             t += 1
             updates = {
                 "Temperature": round(25.0 + 10.0 * math.sin(t * 0.1) + random.gauss(0, 0.3), 2),
@@ -103,5 +113,6 @@ if __name__ == "__main__":
             host=os.getenv("OPCUA_SERVER_HOST", "0.0.0.0"),  # noqa: S104
             port=int(os.getenv("OPCUA_SERVER_PORT", "4840")),
             status_every=int(os.getenv("OPCUA_STATUS_EVERY", "50")),
+            freeze_after_s=float(os.getenv("OPCUA_FREEZE_AFTER_S", "0")),
         ).start()
     )

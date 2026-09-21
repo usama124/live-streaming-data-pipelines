@@ -133,7 +133,10 @@ services:
       dockerfile: services/producer_service/Dockerfile
     image: data-platform-producer:latest
     container_name: opcua-mock
-    command: ["python", "-m", "app.sources.opcua_source"]
+    entrypoint: ["python3", "-m", "connectors.opcua.mock_server"]
+    working_dir: /opt
+    environment:
+      - PYTHONPATH=/opt
     ports:
       - "4840:4840"
     networks:

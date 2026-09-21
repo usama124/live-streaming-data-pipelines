@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from typing import Any
 
@@ -10,6 +9,7 @@ from docker.errors import NotFound
 
 from common.app_common.models import PipelineConfig, PipelineState
 from common.app_common.runtime.base import RuntimeAdapter
+from common.app_common.telegraf_config import render_telegraf_config
 
 logger = logging.getLogger("runtime.docker")
 
@@ -55,26 +55,15 @@ class DockerRuntimeAdapter(RuntimeAdapter):
         return await asyncio.to_thread(self._container_running, container_name)
 
     def _producer_env(self, config: PipelineConfig) -> dict[str, str]:
-        s, opts = self._s, config.source_options
-        env: dict[str, str] = {
-            "PIPELINE_ID":             config.pipeline_id,
-            "SOURCE_TYPE":             config.source_type,
-            "REDIS_URL":               s.redis_url,
-            "KAFKA_BOOTSTRAP_SERVERS": s.kafka_bootstrap_servers,
-            "KAFKA_TOPIC":             config.topic,
-            "MOCK_MIN_DELAY_MS":       str(opts.get("min_delay_ms", 100)),
-            "MOCK_MAX_DELAY_MS":       str(opts.get("max_delay_ms", 500)),
+        """The producer is Telegraf now, so it takes one rendered config rather
+        than a dozen env vars. The entrypoint writes TELEGRAF_CONFIG to disk —
+        we drive the *host* Docker daemon, so a bind-mounted path here would have
+        to exist on the host, not in this container."""
+        return {
+            "TELEGRAF_CONFIG": render_telegraf_config(
+                config, kafka_brokers=self._s.kafka_bootstrap_servers
+            ),
         }
-        if config.source_type == "opcua":
-            env.update({
-                "OPCUA_ENDPOINT":               str(opts.get("endpoint", "")),
-                "OPCUA_NODE_IDS":               ",".join(opts.get("node_ids", [])),
-                "OPCUA_NODE_NAMES_JSON":        json.dumps(opts.get("node_names", {})),
-                "OPCUA_PUBLISHING_INTERVAL_MS": str(opts.get("publishing_interval_ms", 500)),
-                "OPCUA_RECONNECT_BASE_S":       str(opts.get("reconnect_base_s", 2.0)),
-                "OPCUA_RECONNECT_MAX_S":        str(opts.get("reconnect_max_s", 60.0)),
-            })
-        return env
 
     def _consumer_env(self, config: PipelineConfig) -> dict[str, str]:
         s = self._s

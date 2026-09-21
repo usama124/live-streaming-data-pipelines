@@ -36,7 +36,7 @@ class PipelineCreateRequest(BaseModel):
 
     airflow_dag_id: str | None = None
 
-    source_type:            str            = "mock"
+    source_type:            str            = "opcua"
     topic:                  str | None     = None
     batch_size:             int            = Field(default=500, ge=1, le=100_000)
     flush_interval_seconds: int            = Field(default=60, ge=1, le=3600)
@@ -47,7 +47,7 @@ class PipelineConfig(BaseModel):
     pipeline_id:            str
     pipeline_type:          PipelineType
     airflow_dag_id:         str | None     = None
-    source_type:            str            = "mock"
+    source_type:            str            = "opcua"
     topic:                  str
     batch_size:             int            = 500
     flush_interval_seconds: int            = 60
