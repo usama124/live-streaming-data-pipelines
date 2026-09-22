@@ -55,7 +55,7 @@ def test_connector_args_match_the_pipeline_source_options() -> None:
     assert "connector.py" in " ".join(execd["command"]), execd["command"]
 
     env = _env(rendered)
-    assert env["OPCUA_ENDPOINT"] == cfg.source_options["endpoint"]
+    assert env["OPCUA_ENDPOINT"] == cfg.source_options.endpoint
     assert env["OPCUA_NODE_IDS"] == "ns=2;i=2,ns=2;i=3"
     assert env["OPCUA_PUBLISHING_INTERVAL_MS"] == "250"
     assert env["PIPELINE_ID"] == "pipe-42"

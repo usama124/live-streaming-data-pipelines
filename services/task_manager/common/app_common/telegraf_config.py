@@ -17,6 +17,7 @@ from string import Template
 from typing import Any
 
 from common.app_common.models import PipelineConfig
+from common.app_common.sources import spec_for
 
 def _template_dirs() -> list[Path]:
     """Where to look for templates: the image path first, then a source checkout.
@@ -63,18 +64,37 @@ def _template(source_type: str) -> Template:
     )
 
 
-def _opcua_environment(config: PipelineConfig) -> list[str]:
-    opts = config.source_options
-    env = {
-        "PIPELINE_ID": config.pipeline_id,
-        "OPCUA_ENDPOINT": opts.get("endpoint", ""),
-        "OPCUA_NODE_IDS": ",".join(opts.get("node_ids", [])),
-        "OPCUA_NODE_NAMES_JSON": json.dumps(opts.get("node_names", {})),
-        "OPCUA_PUBLISHING_INTERVAL_MS": str(opts.get("publishing_interval_ms", 500)),
-    }
-    if "connect_timeout_s" in opts:
-        env["OPCUA_CONNECT_TIMEOUT_S"] = str(opts["connect_timeout_s"])
-    return [f"{k}={v}" for k, v in env.items()]
+def _substitutions(
+    config: PipelineConfig,
+    *,
+    kafka_brokers: str,
+    connector_dir: str = CONNECTOR_DIR,
+    restart_delay: str = "10s",
+) -> dict[str, object]:
+    """Every placeholder any template may use.
+
+    The set is uniform across source types: a native-input template simply does
+    not reference `command` or `environment`, and safe_substitute leaves what it
+    does not use alone.
+    """
+    spec = spec_for(config.source_type)
+    command = spec.command(connector_dir) if spec.command else []
+
+    return dict(
+        interval="10s",
+        flush_interval="5s",
+        metric_batch_size=config.batch_size,
+        metric_buffer_limit=max(config.batch_size * 20, 10_000),
+        command=_toml(command),
+        environment=_toml(spec.environment(config)),
+        restart_delay=restart_delay,
+        time_format=_TIME_FORMAT,
+        measurement=config.topic,
+        measurement_name=_toml(config.topic),
+        brokers=_toml([b.strip() for b in kafka_brokers.split(",") if b.strip()]),
+        topic=_toml(config.topic),
+        METRICS_PORT=METRICS_PORT,
+    )
 
 
 def render_telegraf_config(
@@ -85,26 +105,12 @@ def render_telegraf_config(
     restart_delay: str = "10s",
 ) -> str:
     """Return the full Telegraf config text for one pipeline."""
-    if config.source_type != "opcua":
-        raise ValueError(
-            f"no Telegraf template for source_type={config.source_type!r}. "
-            "MQTT uses Telegraf's native input; see docs/ONBOARDING.md §5."
-        )
+    spec_for(config.source_type)  # raises ValueError for an unregistered type
 
-    command = ["python3", f"{connector_dir}/opcua/connector.py"]
-
-    return _template(config.source_type).substitute(
-        interval="10s",
-        flush_interval="5s",
-        metric_batch_size=config.batch_size,
-        metric_buffer_limit=max(config.batch_size * 20, 10_000),
-        command=_toml(command),
-        environment=_toml(_opcua_environment(config)),
-        restart_delay=restart_delay,
-        time_format=_TIME_FORMAT,
-        measurement=config.topic,
-        measurement_name=_toml(config.topic),
-        brokers=_toml([b.strip() for b in kafka_brokers.split(",") if b.strip()]),
-        topic=_toml(config.topic),
-        METRICS_PORT=METRICS_PORT,
+    # safe_substitute, not substitute: a native-input template has no $command
+    # or $environment, and substitute() would raise KeyError on the ones it does
+    # not use.
+    return _template(config.source_type).safe_substitute(
+        _substitutions(config, kafka_brokers=kafka_brokers,
+                       connector_dir=connector_dir, restart_delay=restart_delay)
     )

@@ -24,24 +24,16 @@ from kubernetes.client.rest import ApiException
 
 from common.app_common.models import PipelineConfig, PipelineState
 from common.app_common.runtime.base import RuntimeAdapter
+from common.app_common.sources import spec_for
 from common.app_common.telegraf_config import render_telegraf_config
 
 logger = logging.getLogger("runtime.kubernetes")
 
 HEALTH_PORT = 8080
 
-# How long a source may produce nothing before the liveness probe fails and
-# kubelet recycles the pod.
-#
-# OPC UA publishes on *change*, so this is not "how often the sensor is read" —
-# a genuinely static reading sends nothing, and too low a number here restarts
-# healthy pipelines in a loop. 60s is the starting point for OPC UA: long enough
-# to ride out a quiet sensor, short enough that a dead session is caught in a
-# minute rather than an hour. Raise it per pipeline via
-# `source_options["staleness_threshold_s"]` for sources that are legitimately
-# quieter, and see docs/BACKLOG.md — this wants a measurement from a real plant,
-# not a number chosen at a desk.
-STALENESS_THRESHOLD_S: dict[str, float] = {"opcua": 60.0}
+# Per-source defaults live on the source registry (common/app_common/sources.py)
+# so a new source type carries its own number rather than silently inheriting
+# OPC UA's. Override per pipeline with source_options.staleness_threshold_s.
 DEFAULT_STALENESS_THRESHOLD_S = 60.0
 
 _TEMPLATE_NAME = "producer-deployment-template.yaml"
@@ -62,10 +54,12 @@ def _template_path() -> Path:
 
 
 def staleness_threshold_for(config: PipelineConfig) -> float:
-    override = config.source_options.get("staleness_threshold_s")
-    if override is not None:
-        return float(override)
-    return STALENESS_THRESHOLD_S.get(config.source_type, DEFAULT_STALENESS_THRESHOLD_S)
+    if config.source_options.staleness_threshold_s is not None:
+        return float(config.source_options.staleness_threshold_s)
+    try:
+        return spec_for(config.source_type).default_staleness_threshold_s
+    except ValueError:
+        return DEFAULT_STALENESS_THRESHOLD_S
 
 
 def deployment_name(pipeline_id: str) -> str:

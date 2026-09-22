@@ -20,6 +20,7 @@ def _config(**overrides) -> PipelineConfig:
         user_id="1",
         collection_number=22,
         table_name="aveva_iot",
+        source_options={"endpoint": "opc.tcp://source:4840/", "node_ids": ["ns=2;i=2"]},
     )
     body.update(overrides)
     return PipelineConfig(**body)
