@@ -48,4 +48,7 @@ CREATE TABLE IF NOT EXISTS {database}.{DLQ_TABLE} (
 ) ENGINE = MergeTree
 PARTITION BY toYYYYMM(failed_at)
 ORDER BY (pipeline_id, failed_at)
+-- The DLQ is a diagnosis and replay surface, not an archive, and `payload` can
+-- be 64KB per row. Replay happens within days of a failure, not months.
+TTL toDateTime(failed_at) + INTERVAL 30 DAY
 """

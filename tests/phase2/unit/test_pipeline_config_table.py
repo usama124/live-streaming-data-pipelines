@@ -63,3 +63,13 @@ def test_invalid_table_name_is_rejected_at_config_time() -> None:
     """Not at insert time, when it is already too late and half a batch is in."""
     with pytest.raises((ValidationError, ValueError)):
         _config(table_name="drop table; --")
+
+
+def test_dead_letter_table_has_a_retention_ttl() -> None:
+    """The DLQ is a diagnosis and replay surface, not an archive. payload can be
+    64KB a row, so unbounded growth is a real cost."""
+    from common.app_common.ch_schema import create_dlq_table_ddl
+
+    ddl = create_dlq_table_ddl("data_platform")
+
+    assert "TTL toDateTime(failed_at) + INTERVAL 30 DAY" in ddl, ddl
