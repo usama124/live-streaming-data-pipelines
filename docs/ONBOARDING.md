@@ -14,7 +14,7 @@ git clone <this repo>
 cd <repo>
 docker compose up                              # Redis, Kafka, ClickHouse, API, controller
 docker compose --profile templates build       # producer + consumer images
-docker compose --profile opcua up -d           # mock OPC UA server on :4840
+docker compose --profile stratahub up -d           # mock OPC UA server on :4840
 ```
 
 The root stack needs no `.env` — it passes its config inline. Running the tests needs the

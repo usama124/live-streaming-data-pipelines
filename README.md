@@ -16,7 +16,7 @@ config inline. Two optional profiles:
 
 ```bash
 docker compose --profile templates build   # build the producer/consumer images
-docker compose --profile opcua up -d       # mock OPC UA server on :4840
+docker compose --profile stratahub up -d       # mock OPC UA server on :4840
 ```
 
 The `services/task_manager/` stack (API + controller + watchdog together) is separate and

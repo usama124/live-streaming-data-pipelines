@@ -212,6 +212,9 @@ services:
   prometheus:
     image: prom/prometheus:v3.0.1
     container_name: prometheus
+    # The image runs as nobody, which can't read the Docker socket, so producer
+    # discovery fails with "permission denied". Local dev only.
+    user: root
     ports:
       - "9090:9090"
     volumes:
@@ -229,7 +232,7 @@ services:
     build:
       context: .
       dockerfile: services/producer_service/Dockerfile
-    image: data-platform-producer:latest
+    image: data-platform-opcua-mock:latest
     container_name: opcua-mock
     entrypoint: ["python3", "-m", "connectors.opcua.mock_server"]
     working_dir: /opt
@@ -240,7 +243,7 @@ services:
     networks:
       - backend
     profiles:
-      - opcua
+      - stratahub
     restart: unless-stopped
 
   # ── Image build targets (not started normally) ───────────────────────────
