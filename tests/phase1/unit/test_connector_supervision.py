@@ -15,9 +15,7 @@ import time
 import pytest
 
 from common.app_common.models import PipelineConfig, PipelineType
-from common.app_common.telegraf_config import render_telegraf_config
 from tests.phase1.conftest import (
-    KAFKA_INTERNAL,
     consume,
     mock_server_container,
     opcua_source_options,
@@ -53,7 +51,7 @@ def test_telegraf_restarts_the_connector_after_it_exits(kafka) -> None:
     config = _pipeline(unique_id("t4-restart"), "t4-mock")
 
     with mock_server_container("t4-mock"), telegraf_container(
-        "t4-telegraf", render_telegraf_config(config, kafka_brokers=KAFKA_INTERNAL)
+        "t4-telegraf", config
     ) as telegraf:
         assert consume(config.topic, count=5), "no data before the kill"
 
@@ -93,7 +91,7 @@ def test_stalled_source_is_detected(kafka) -> None:
     config = _pipeline(unique_id("t7-stalled"), "t7-mock")
 
     with mock_server_container("t7-mock", freeze_after_s=10), telegraf_container(
-        "t7-telegraf", render_telegraf_config(config, kafka_brokers=KAFKA_INTERNAL)
+        "t7-telegraf", config
     ):
         assert consume(config.topic, count=5, timeout=60), "no data before the freeze"
 

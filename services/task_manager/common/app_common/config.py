@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     # ── Infrastructure ────────────────────────────────────────────────────
     redis_url:               str = "redis://172.17.0.1:6379/2"
     kafka_bootstrap_servers: str = "172.17.0.1:9092"
+    # The consumer pool's group — deleting a pipeline waits for it to drain the topic.
+    consumer_group_id:       str = "consumer-pool"
 
     # ── Runtime ───────────────────────────────────────────────────────────
     # "kubernetes" → KubernetesRuntimeAdapter (default; staging and production)

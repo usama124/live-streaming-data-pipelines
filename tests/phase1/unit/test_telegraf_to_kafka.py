@@ -11,9 +11,7 @@ from __future__ import annotations
 import pytest
 
 from common.app_common.models import PipelineConfig, PipelineType
-from common.app_common.telegraf_config import render_telegraf_config
 from tests.phase1.conftest import (
-    KAFKA_INTERNAL,
     consume,
     unique_id,
     mock_server_container,
@@ -38,7 +36,7 @@ def test_records_reach_the_pipelines_own_topic(kafka) -> None:
     config = _pipeline(unique_id("t3-single"), "t3-mock-a")
 
     with mock_server_container("t3-mock-a"), telegraf_container(
-        "t3-telegraf-a", render_telegraf_config(config, kafka_brokers=KAFKA_INTERNAL)
+        "t3-telegraf-a", config
     ) as telegraf:
         messages = consume(config.topic, count=5)
 
@@ -59,9 +57,9 @@ def test_two_concurrent_pipelines_do_not_leak_into_each_others_topics(kafka) -> 
 
     with mock_server_container("t3-mock-la"), mock_server_container("t3-mock-lb"), \
             telegraf_container(
-                "t3-tg-la", render_telegraf_config(config_a, kafka_brokers=KAFKA_INTERNAL)
+                "t3-tg-la", config_a
             ), telegraf_container(
-                "t3-tg-lb", render_telegraf_config(config_b, kafka_brokers=KAFKA_INTERNAL)
+                "t3-tg-lb", config_b
             ):
         messages_a = consume(config_a.topic, count=5)
         messages_b = consume(config_b.topic, count=5)
@@ -81,7 +79,7 @@ def test_string_readings_are_not_silently_dropped(kafka) -> None:
     config = _pipeline(unique_id("t3-strings"), "t3-mock-s")
 
     with mock_server_container("t3-mock-s"), telegraf_container(
-        "t3-tg-s", render_telegraf_config(config, kafka_brokers=KAFKA_INTERNAL)
+        "t3-tg-s", config
     ) as telegraf:
         messages = consume(config.topic, count=40, timeout=60)
 

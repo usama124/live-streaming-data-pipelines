@@ -55,7 +55,8 @@ from watchdog.observers.polling import PollingObserver
 
 from task_manager.app.config import settings
 from task_manager.app.pipeline_definition import PipelineDefinition
-from common.app_common.models import PipelineConfig, PipelineType
+from task_manager.app.provisioning import provision
+from common.app_common.models import PipelineConfig, PipelineStatus, PipelineType
 from common.app_common.redis_repo import PipelineRedisRepository
 
 logger = logging.getLogger("task-manager.watcher")
@@ -220,18 +221,29 @@ async def _handle(fp: Path, repo: PipelineRedisRepository) -> None:
     )
     try:
         await repo.create_pipeline(config)
+    except ValueError:
+        # Race: other replica registered between our get_config and create_pipeline
+        logger.info("Watcher: '%s' registered by other replica — moved to processed", pid)
+        _move(fp, fp.parent / _PROCESSED)
+        return
+    except Exception:
+        logger.exception("Watcher: failed to register '%s'", pid)
+        _move(fp, fp.parent / _FAILED)
+        return
+
+    # Same as the API: topic and table before the producer can start.
+    try:
+        await provision(config)
         logger.info(
             "Watcher: '%s' registered (source=%s) — "
             "start via POST /pipelines/%s/start",
             pid, defn.source_type, pid,
         )
         _move(fp, fp.parent / _PROCESSED)
-    except ValueError:
-        # Race: other replica registered between our get_config and create_pipeline
-        logger.info("Watcher: '%s' registered by other replica — moved to processed", pid)
-        _move(fp, fp.parent / _PROCESSED)
-    except Exception:
-        logger.exception("Watcher: failed to register '%s'", pid)
+    except Exception as exc:
+        logger.exception("Watcher: provisioning failed for '%s'", pid)
+        await repo.update_state(pid, status=PipelineStatus.FAILED,
+                                last_error=f"provisioning failed: {exc}")
         _move(fp, fp.parent / _FAILED)
 
 

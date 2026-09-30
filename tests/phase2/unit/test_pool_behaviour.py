@@ -15,6 +15,7 @@ from tests.phase2.conftest import (
     ch_query,
     create_pipeline,
     dlq_count,
+    list_topics,
     produce,
     restart_pool,
     telegraf_message,
@@ -159,3 +160,26 @@ def test_13_topic_to_table_mapping_holds_under_load() -> None:
     for pid, table in tables.items():
         foreign = ch_count(table, f"pipeline_id != '{pid}'")
         assert foreign == 0, f"{table} holds {foreign} rows belonging to another pipeline"
+
+
+def test_14_delete_drains_the_topic_then_removes_it() -> None:
+    """Delete must not drop what the pool had not written yet, must remove the
+    topic, and a late producer must not bring the topic back."""
+    import requests
+    from aiokafka.errors import KafkaError
+
+    pipeline_id = unique_id("p14del")
+    table = create_pipeline(pipeline_id, collection_number=14, table_name=unique_table("deleted"))["table"]
+    topic = f"pipeline.{pipeline_id}.events"
+
+    produce(topic, [telegraf_message(pipeline_id, sequence=i) for i in range(30)])
+    # Deliberately no wait for rows: the delete itself must wait for the pool.
+    response = requests.delete(f"http://localhost:8000/pipelines/{pipeline_id}", timeout=120)
+    assert response.status_code == 204, response.text
+
+    assert ch_count(table) == 30, "delete dropped rows the pool had not written yet"
+    assert topic not in list_topics(), f"{topic} still exists after delete"
+
+    with pytest.raises(KafkaError):
+        produce(topic, [telegraf_message(pipeline_id, sequence=99)])
+    assert topic not in list_topics(), "a late write re-created the deleted topic"

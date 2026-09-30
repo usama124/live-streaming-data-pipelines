@@ -91,6 +91,22 @@ def produce(topic: str, messages: list[dict]) -> None:
     asyncio.run(_run())
 
 
+def list_topics() -> set[str]:
+    import asyncio
+
+    from aiokafka.admin import AIOKafkaAdminClient
+
+    async def _run() -> set[str]:
+        admin = AIOKafkaAdminClient(bootstrap_servers=KAFKA_EXTERNAL)
+        await admin.start()
+        try:
+            return set(await admin.list_topics())
+        finally:
+            await admin.close()
+
+    return asyncio.run(_run())
+
+
 def telegraf_message(pipeline_id: str, *, sensor: str = "temperature",
                      value=25.5, sequence: int = 1, timestamp_ms: int | None = None) -> dict:
     return {

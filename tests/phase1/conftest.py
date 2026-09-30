@@ -18,6 +18,9 @@ from pathlib import Path
 
 import pytest
 
+from common.app_common.models import PipelineConfig
+from common.app_common.telegraf_config import render_telegraf_config
+
 REPO = Path(__file__).resolve().parents[2]
 
 # The mock server exposes these under ns=2; i=2.. in NODE_SCHEMA declaration order.
@@ -235,8 +238,28 @@ def mock_server_container(name: str, freeze_after_s: float = 0.0) -> Container:
     )
 
 
-def telegraf_container(name: str, config_text: str) -> Container:
-    return Container(PRODUCER_IMAGE, name, environment={"TELEGRAF_CONFIG": config_text})
+def create_topic(topic: str) -> None:
+    """Auto-create is off on the broker — the API provisions topics, and these
+    tests run Telegraf without it, so they create their own."""
+    import asyncio
+
+    from aiokafka.admin import AIOKafkaAdminClient, NewTopic
+
+    async def _run() -> None:
+        admin = AIOKafkaAdminClient(bootstrap_servers=KAFKA_EXTERNAL)
+        await admin.start()
+        try:
+            await admin.create_topics([NewTopic(topic, num_partitions=1, replication_factor=1)])
+        finally:
+            await admin.close()
+
+    asyncio.run(_run())
+
+
+def telegraf_container(name: str, config: PipelineConfig) -> Container:
+    create_topic(config.topic)
+    return Container(PRODUCER_IMAGE, name, environment={
+        "TELEGRAF_CONFIG": render_telegraf_config(config, kafka_brokers=KAFKA_INTERNAL)})
 
 
 def opcua_source_options(host: str) -> dict:

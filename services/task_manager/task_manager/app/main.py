@@ -33,7 +33,7 @@ from redis.asyncio import Redis
 
 from task_manager.app.config import settings
 from task_manager.app.folder_watcher import folder_watcher_loop
-from task_manager.app.provisioning import provision
+from task_manager.app.provisioning import delete_topic, provision, wait_for_drain
 from common.app_common.models import (
     DesiredState,
     PipelineConfig,
@@ -300,10 +300,15 @@ async def delete_pipeline(
     config = await repo.get_config(pipeline_id)
     if config is None:
         raise HTTPException(404, "Pipeline not found")
-    state = await repo.get_state(pipeline_id)
-    if state and state.desired_state == DesiredState.RUNNING:
-        updated = await repo.update_state(pipeline_id, desired_state=DesiredState.STOPPED)
-        await repo.publish_state_event(updated, "stop")
-        await asyncio.sleep(3)
+    if config.pipeline_type == PipelineType.LIVE:
+        # Through the runtime, as stop does — the controller that used to act on
+        # a published event does not exist under Kubernetes.
+        await stop_pipeline(pipeline_id, repo)
+        # The pool looks each topic's config up in Redis, so drain while it is
+        # still there, and only then take the topic away.
+        if not await wait_for_drain(config):
+            raise HTTPException(409, "pipeline stopped, but the consumer pool has not "
+                                     "written everything in its topic yet — retry the delete")
+        await delete_topic(config)
     await repo.delete_pipeline(pipeline_id)
     return Response(status_code=204)
