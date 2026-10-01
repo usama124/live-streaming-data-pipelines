@@ -5,9 +5,10 @@
 # used to do by polling Redis.
 #
 # Rendered by common/app_common/runtime/kubernetes_runtime.py. The Telegraf
-# config itself is not templated in here; it arrives as a ConfigMap, because a
-# multi-line TOML document substituted into YAML is a quoting accident waiting
-# to happen.
+# config is not templated in here: the renderer appends it to `env` as
+# TELEGRAF_CONFIG after parsing (a multi-line TOML document substituted into
+# YAML is a quoting accident waiting to happen), and the image's entrypoint.sh
+# writes it to /etc/telegraf/telegraf.conf — the same path Compose takes.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -36,18 +37,10 @@ spec:
       # crashes config parsing. We address services by DNS name, so none of
       # those vars are wanted.
       enableServiceLinks: false
-      volumes:
-        - name: telegraf-config
-          configMap:
-            name: producer-${PIPELINE_ID}
       containers:
         - name: producer
           image: ${PRODUCER_IMAGE}
           imagePullPolicy: ${IMAGE_PULL_POLICY}
-          volumeMounts:
-            - name: telegraf-config
-              mountPath: /etc/telegraf/telegraf.conf
-              subPath: telegraf.conf
           env:
             - name: HEALTH_PORT
               value: "${HEALTH_PORT}"

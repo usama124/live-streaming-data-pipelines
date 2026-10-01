@@ -1,0 +1,39 @@
+# Scrape targets under Kubernetes (k8s/dev/monitoring.yaml). Same three jobs as
+# prometheus.yml, which is the Compose version — but every target is a pod found
+# through the Kubernetes API, since producer pods come and go with pipelines and
+# the others can be rescheduled onto new IPs.
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/rules.yml
+
+scrape_configs:
+  - job_name: consumer-pool
+    kubernetes_sd_configs: [{role: pod, namespaces: {own_namespace: true}}]
+    relabel_configs:
+      - {source_labels: [__meta_kubernetes_pod_label_app], regex: consumer-pool, action: keep}
+      - {source_labels: [__meta_kubernetes_pod_phase], regex: Running, action: keep}
+      - {source_labels: [__meta_kubernetes_pod_ip], target_label: __address__, replacement: "$1:9100"}
+      - {source_labels: [__meta_kubernetes_pod_name], target_label: instance}
+
+  - job_name: clickhouse
+    kubernetes_sd_configs: [{role: pod, namespaces: {own_namespace: true}}]
+    relabel_configs:
+      - {source_labels: [__meta_kubernetes_pod_label_app], regex: clickhouse, action: keep}
+      - {source_labels: [__meta_kubernetes_pod_phase], regex: Running, action: keep}
+      # The pod declares 8123 too; one target, on the named metrics port.
+      - {source_labels: [__meta_kubernetes_pod_container_port_name], regex: metrics, action: keep}
+      - {source_labels: [__meta_kubernetes_pod_name], target_label: instance}
+
+  # Telegraf's prometheus_client output, one per pipeline. pipeline_id comes from
+  # the label the producer Deployment template already sets.
+  - job_name: producers
+    kubernetes_sd_configs: [{role: pod, namespaces: {own_namespace: true}}]
+    relabel_configs:
+      - {source_labels: [__meta_kubernetes_pod_label_app], regex: producer, action: keep}
+      - {source_labels: [__meta_kubernetes_pod_phase], regex: Running, action: keep}
+      - {source_labels: [__meta_kubernetes_pod_ip], target_label: __address__, replacement: "$1:9273"}
+      - {source_labels: [__meta_kubernetes_pod_label_pipeline_id], target_label: pipeline_id}
+      - {source_labels: [__meta_kubernetes_pod_name], target_label: instance}

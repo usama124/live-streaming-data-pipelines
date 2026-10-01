@@ -100,7 +100,6 @@ def test_i9_full_lifecycle_on_kubernetes(api, clickhouse) -> None:
              what="producer pods to be cleaned up")
 
     kubectl("delete", "deployment", f"producer-{pipeline_id}", "--ignore-not-found", check=False)
-    kubectl("delete", "configmap", f"producer-{pipeline_id}", "--ignore-not-found", check=False)
 
 
 def test_i10_killing_pods_self_heals(api, clickhouse) -> None:
@@ -119,7 +118,6 @@ def test_i10_killing_pods_self_heals(api, clickhouse) -> None:
     finally:
         requests.post(f"{api}/pipelines/{pipeline_id}/stop", timeout=120)
         kubectl("delete", "deployment", f"producer-{pipeline_id}", "--ignore-not-found", check=False)
-        kubectl("delete", "configmap", f"producer-{pipeline_id}", "--ignore-not-found", check=False)
 
 
 def test_i11_liveness_probe_recycles_a_stalled_producer(api) -> None:
@@ -158,7 +156,6 @@ def test_i11_liveness_probe_recycles_a_stalled_producer(api) -> None:
     finally:
         requests.post(f"{api}/pipelines/{pipeline_id}/stop", timeout=120)
         kubectl("delete", "deployment", f"producer-{pipeline_id}", "--ignore-not-found", check=False)
-        kubectl("delete", "configmap", f"producer-{pipeline_id}", "--ignore-not-found", check=False)
 
 
 def test_i12_phase2_guarantees_hold_under_the_new_runtime(api, clickhouse) -> None:
@@ -182,4 +179,3 @@ def test_i12_phase2_guarantees_hold_under_the_new_runtime(api, clickhouse) -> No
         for pid in (id_a, id_b):
             requests.post(f"{api}/pipelines/{pid}/stop", timeout=120)
             kubectl("delete", "deployment", f"producer-{pid}", "--ignore-not-found", check=False)
-            kubectl("delete", "configmap", f"producer-{pid}", "--ignore-not-found", check=False)

@@ -67,7 +67,7 @@ def deployment_name(pipeline_id: str) -> str:
 
 
 def render_producer_deployment(
-    config: PipelineConfig, *, replicas: int, producer_image: str,
+    config: PipelineConfig, *, replicas: int, producer_image: str, kafka_brokers: str,
     image_pull_policy: str = "IfNotPresent",
 ) -> dict[str, Any]:
     """The Deployment manifest for one pipeline's producer."""
@@ -82,7 +82,16 @@ def render_producer_deployment(
         # fail it, or a slow source restarts forever without ever starting.
         PROBE_INITIAL_DELAY_S=int(staleness_threshold_for(config)) + 30,
     )
-    return yaml.safe_load(rendered)
+    manifest = yaml.safe_load(rendered)
+    # Same as Compose: the config travels as TELEGRAF_CONFIG and entrypoint.sh
+    # writes it to telegraf.conf. Added after parsing, not substituted into the
+    # YAML text, so the multi-line TOML never meets YAML quoting. Being in the
+    # pod template also means a changed config rolls the pods by itself.
+    manifest["spec"]["template"]["spec"]["containers"][0]["env"].append({
+        "name": "TELEGRAF_CONFIG",
+        "value": render_telegraf_config(config, kafka_brokers=kafka_brokers),
+    })
+    return manifest
 
 
 class KubernetesRuntimeAdapter(RuntimeAdapter):
@@ -97,7 +106,6 @@ class KubernetesRuntimeAdapter(RuntimeAdapter):
 
     async def start_live_pipeline(self, config: PipelineConfig, state: PipelineState) -> tuple[str, str]:
         name = deployment_name(config.pipeline_id)
-        await asyncio.to_thread(self._apply_config_map, config)
         await asyncio.to_thread(self._apply_deployment, config, 1)
         logger.info("Deployment %s at replicas=1", name)
         # The pool is a separate, shared Deployment — a pipeline never starts one.
@@ -112,7 +120,6 @@ class KubernetesRuntimeAdapter(RuntimeAdapter):
         and back — a rollout keeps the Deployment's own history and avoids a
         window where the pipeline simply does not exist."""
         name = deployment_name(config.pipeline_id)
-        await asyncio.to_thread(self._apply_config_map, config)
         await asyncio.to_thread(self._apply_deployment, config, 1)
         await asyncio.to_thread(self._restart_rollout, name)
         logger.info("Deployment %s rolled", name)
@@ -157,30 +164,10 @@ class KubernetesRuntimeAdapter(RuntimeAdapter):
         self._load()
         return client.CoreV1Api()
 
-    def _apply_config_map(self, config: PipelineConfig) -> None:
-        """The rendered Telegraf config, mounted into the pod as a file."""
-        name = deployment_name(config.pipeline_id)
-        body = client.V1ConfigMap(
-            metadata=client.V1ObjectMeta(
-                name=name,
-                labels={"app": "producer", "pipeline-id": config.pipeline_id,
-                        "managed-by": "task-manager"},
-            ),
-            data={"telegraf.conf": render_telegraf_config(
-                config, kafka_brokers=self._s.kafka_bootstrap_servers
-            )},
-        )
-        core = self._core()
-        try:
-            core.create_namespaced_config_map(self._namespace, body)
-        except ApiException as exc:
-            if exc.status != 409:
-                raise
-            core.replace_namespaced_config_map(name, self._namespace, body)
-
     def _apply_deployment(self, config: PipelineConfig, replicas: int) -> None:
         manifest = render_producer_deployment(
             config, replicas=replicas, producer_image=self._s.producer_image,
+            kafka_brokers=self._s.kafka_bootstrap_servers,
             image_pull_policy=getattr(self._s, "image_pull_policy", "IfNotPresent"),
         )
         apps = self._apps()

@@ -1,0 +1,89 @@
+# Prometheus and Kafka UI inside kind — the Compose stack's monitoring, in-cluster.
+#
+# Prometheus reads its config from the `prometheus-config` ConfigMap, built from
+# the repo files rather than copied in here so the alert rules have one source:
+#
+#   kubectl --context kind-stratahub-live create configmap prometheus-config \
+#     --from-file=prometheus.yml=monitoring/prometheus/prometheus-k8s.yml \
+#     --from-file=rules.yml=monitoring/prometheus/rules.yml \
+#     --dry-run=client -o yaml | kubectl --context kind-stratahub-live apply -f -
+#
+# Until that exists the Prometheus pod waits in ContainerCreating; nothing else
+# depends on it.
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: prometheus}
+---
+# Pod discovery only — namespaced, read-only.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: prometheus}
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: prometheus}
+subjects: [{kind: ServiceAccount, name: prometheus}]
+roleRef: {kind: Role, name: prometheus, apiGroup: rbac.authorization.k8s.io}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: prometheus}
+spec:
+  selector: {app: prometheus}
+  ports: [{port: 9090, targetPort: 9090}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: prometheus}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: prometheus}}
+  template:
+    metadata: {labels: {app: prometheus}}
+    spec:
+      serviceAccountName: prometheus
+      containers:
+        - name: prometheus
+          image: prom/prometheus:v3.0.1
+          args: ["--config.file=/etc/prometheus/prometheus.yml"]
+          ports: [{containerPort: 9090}]
+          volumeMounts:
+            - {name: config, mountPath: /etc/prometheus}
+          readinessProbe:
+            httpGet: {path: /-/ready, port: 9090}
+            periodSeconds: 5
+      volumes:
+        - name: config
+          configMap: {name: prometheus-config}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: kafka-ui}
+spec:
+  selector: {app: kafka-ui}
+  ports: [{port: 8080, targetPort: 8080}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: kafka-ui}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: kafka-ui}}
+  template:
+    metadata: {labels: {app: kafka-ui}}
+    spec:
+      # Same reason as task-manager.yaml: Service-link env vars (KAFKA_PORT=tcp://…)
+      # collide with the KAFKA_* settings this image reads.
+      enableServiceLinks: false
+      containers:
+        - name: kafka-ui
+          image: ghcr.io/kafbat/kafka-ui:v1.0.0
+          ports: [{containerPort: 8080}]
+          env:
+            - {name: KAFKA_CLUSTERS_0_NAME, value: live}
+            - {name: KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS, value: "kafka:9092"}
+            - {name: DYNAMIC_CONFIG_ENABLED, value: "true"}

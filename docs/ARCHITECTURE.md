@@ -120,8 +120,10 @@ so kubelet recycles a hung-but-alive pod — this is the backstop for §3.1's Te
 A failed start returns an error to the API caller directly, rather than surfacing on a later
 poll — there is no poll; there is no controller loop to poll on.
 
-As built (Phase 3): `KubernetesRuntimeAdapter`, the manifests in `k8s/`, and a per-pipeline
-ConfigMap holding the rendered Telegraf config — a multi-line TOML document substituted into
+As built (Phase 3): `KubernetesRuntimeAdapter` and the manifests in `k8s/`. The rendered
+Telegraf config reaches the pod as the `TELEGRAF_CONFIG` env var, exactly as under Compose, and
+the image's `entrypoint.sh` writes it to `telegraf.conf`. The renderer adds it to the parsed
+manifest rather than templating it into YAML text — a multi-line TOML document substituted into
 YAML is a quoting accident waiting to happen. Stop scales to 0 rather than deleting, so a
 stopped pipeline is still a pipeline. `k8s/dev/` runs the whole system inside kind for tests.
 
@@ -154,7 +156,10 @@ Three layers, not one:
 
 As built (Phase 4): Kafka UI and Prometheus in `docker-compose.yml`, scrape config and alert
 rules in `monitoring/prometheus/`. Producers are *discovered* rather than listed — they come
-and go per pipeline — by the Docker label `DockerRuntime` already sets.
+and go per pipeline — by the Docker label `DockerRuntime` already sets. Under Kubernetes the
+same pair runs from `k8s/dev/monitoring.yaml`, with `prometheus-k8s.yml` discovering pods by
+their `app` label (producers carry `pipeline-id`, which becomes `pipeline_id`); the alert rules
+are the same file.
 
 **Staleness is exported as a timestamp, not an age.** `pipeline_last_event_timestamp_seconds`
 carries the source time of the newest row written; staleness is `time() - that` in PromQL. A

@@ -78,6 +78,25 @@ spec:
   selector: {app: clickhouse}
   ports: [{port: 8123, targetPort: 8123}]
 ---
+# clickhouse/prometheus.xml, for the Prometheus endpoint on :9363 that Compose
+# mounts from the repo. A copy because it has to exist for ClickHouse to start
+# with a subPath mount; keep the two in step.
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: clickhouse-prometheus}
+data:
+  prometheus.xml: |
+    <clickhouse>
+        <prometheus>
+            <endpoint>/metrics</endpoint>
+            <port>9363</port>
+            <metrics>true</metrics>
+            <events>true</events>
+            <asynchronous_metrics>true</asynchronous_metrics>
+            <errors>true</errors>
+        </prometheus>
+    </clickhouse>
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata: {name: clickhouse}
@@ -90,7 +109,11 @@ spec:
       containers:
         - name: clickhouse
           image: clickhouse/clickhouse-server:24.8
-          ports: [{containerPort: 8123}]
+          ports: [{containerPort: 8123}, {containerPort: 9363, name: metrics}]
+          volumeMounts:
+            - name: prometheus
+              mountPath: /etc/clickhouse-server/config.d/prometheus.xml
+              subPath: prometheus.xml
           env:
             # Same set the Compose stack passes. With only CLICKHOUSE_DB set,
             # the image leaves the default user unusable and every client gets
@@ -103,6 +126,9 @@ spec:
             httpGet: {path: /ping, port: 8123}
             initialDelaySeconds: 10
             periodSeconds: 5
+      volumes:
+        - name: prometheus
+          configMap: {name: clickhouse-prometheus}
 ---
 # The mock OPC UA source, in-cluster so producer pods have something to read.
 apiVersion: v1

@@ -148,7 +148,8 @@ def test_liveness_probe_is_present_with_a_real_threshold() -> None:
     """A producer without the probe is the Phase 1 gap shipped to production."""
     config = _pipeline("probe-check")
     manifest = render_producer_deployment(
-        config, replicas=1, producer_image="data-platform-producer:latest")
+        config, replicas=1, producer_image="data-platform-producer:latest",
+        kafka_brokers="kafka:9092")
 
     container = manifest["spec"]["template"]["spec"]["containers"][0]
     probe = container["livenessProbe"]

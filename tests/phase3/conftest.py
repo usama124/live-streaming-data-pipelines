@@ -115,8 +115,6 @@ def cleanup_pipelines():
     for pipeline_id in created:
         kubectl("delete", "deployment", f"producer-{pipeline_id}",
                 "--ignore-not-found", "--wait=false", check=False)
-        kubectl("delete", "configmap", f"producer-{pipeline_id}",
-                "--ignore-not-found", check=False)
 
 
 @pytest.fixture(scope="session")
