@@ -20,7 +20,8 @@ import logging
 import re
 import signal
 
-from aiokafka import AIOKafkaConsumer
+from aiokafka import AIOKafkaConsumer, ConsumerRebalanceListener
+from aiokafka.errors import CommitFailedError, IllegalStateError
 from prometheus_client import start_http_server
 from redis.asyncio import Redis
 
@@ -65,6 +66,26 @@ class PipelineRegistry:
         return config
 
 
+class CommitBeforeRevoke(ConsumerRebalanceListener):
+    """Hold a rebalance until the in-flight batch is inserted *and* committed.
+
+    Creating a pipeline adds a topic matching the pattern, which rebalances the
+    group. Without this, a commit landing after the rebalance fails and the next
+    owner re-reads (re-inserts) the batch. `_handle` holds the same lock across
+    insert+commit, so the revoke waits for it under the still-valid generation.
+    """
+
+    def __init__(self, lock: asyncio.Lock) -> None:
+        self.lock = lock
+
+    async def on_partitions_revoked(self, revoked) -> None:
+        async with self.lock:
+            pass
+
+    async def on_partitions_assigned(self, assigned) -> None:
+        pass
+
+
 async def run() -> None:
     stop = asyncio.Event()
     signal.signal(signal.SIGTERM, lambda *_: stop.set())
@@ -93,7 +114,8 @@ async def run() -> None:
         metadata_max_age_ms=settings.metadata_max_age_ms,
         max_poll_records=settings.batch_size,
     )
-    consumer.subscribe(pattern=settings.topic_pattern)
+    lock = asyncio.Lock()
+    consumer.subscribe(pattern=settings.topic_pattern, listener=CommitBeforeRevoke(lock))
     await consumer.start()
     logger.info("consumer pool started — pattern=%s", settings.topic_pattern)
 
@@ -104,7 +126,7 @@ async def run() -> None:
                 max_records=settings.batch_size,
             )
             if batches:
-                await _handle(batches, registry, sink, consumer)
+                await _handle(batches, registry, sink, consumer, lock)
     finally:
         await consumer.stop()
         await manager.close()
@@ -112,11 +134,21 @@ async def run() -> None:
         logger.info("consumer pool stopped")
 
 
-async def _handle(batches, registry: PipelineRegistry, sink: ClickHouseSink, consumer) -> None:
+async def _handle(batches, registry: PipelineRegistry, sink: ClickHouseSink, consumer,
+                  lock: asyncio.Lock) -> None:
     """Insert every topic's records, then commit — in that order, once."""
-    wrote_anything = False
+    async with lock:
+        await _insert_then_commit(batches, registry, sink, consumer)
+
+
+async def _insert_then_commit(batches, registry: PipelineRegistry, sink: ClickHouseSink,
+                              consumer) -> None:
+    assigned = consumer.assignment()
+    offsets = {}
 
     for partition, messages in batches.items():
+        if partition not in assigned:
+            continue  # revoked since the fetch: the new owner reads it, don't double-insert
         config = await registry.get(partition.topic)
         if config is None:
             continue  # unknown topic: leave the offsets uncommitted
@@ -136,20 +168,26 @@ async def _handle(batches, registry: PipelineRegistry, sink: ClickHouseSink, con
         try:
             result = await sink.write(config, records)
         except Exception:
-            # ClickHouse is unreachable, not a bad record. Do not commit: the
-            # batch is re-read when it comes back.
-            logger.exception("write failed for %s — not committing", partition.topic)
-            return
+            # ClickHouse is unreachable, not a bad record. Don't commit this
+            # topic (re-read when it's back), but do commit topics already written.
+            logger.exception("write failed for %s — not committing it", partition.topic)
+            break
 
-        wrote_anything = True
+        # Only what was written: a bare commit() would also commit skipped topics.
+        offsets[partition] = messages[-1].offset + 1
         if result.dead_lettered:
             logger.warning("%s: %d written, %d dead-lettered (%s)",
                            partition.topic, result.written, result.dead_lettered,
                            "; ".join(result.errors))
 
-    if wrote_anything:
-        await consumer.commit()
-
+    if not offsets:
+        return
+    try:
+        await consumer.commit(offsets)
+    except (CommitFailedError, IllegalStateError):
+        # Kicked from the group (e.g. session timeout) despite the revoke lock.
+        # Rows are already in; the next owner re-reads them — at-least-once.
+        logger.warning("commit failed after rebalance — batch will be re-read", exc_info=True)
 
 if __name__ == "__main__":
     asyncio.run(run())
