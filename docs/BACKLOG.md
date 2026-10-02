@@ -47,6 +47,7 @@ silently reversing course in code.
 
 | Item | Closed by |
 |---|---|
+| Test fixture removed Kafka from a stack in use (tests) | 2026-10-02 — `tests/phase1/conftest.py` `kafka` fixture no longer runs `docker compose rm -sf kafka` at teardown. It decided ownership at session start, so a stack brought up mid-run lost its broker. **Still true:** the suite shares the root compose project and restarts/rebuilds `consumer-pool` and `task-manager` (from the working tree), so running it disrupts a stack you're using — a separate compose project for tests would need the pinned `container_name`s removed. |
 | Dead-letter design spec | Phase 2 — `ARCHITECTURE.md` §3.3.1 and `services/consumer_pool/app/sink.py`. Per-record isolation, shared `dead_letter_events` table, `dlq_rows_total{pipeline_id}`, no automatic replay. Registry #11 and #11b cover it. |
 | `ch_unique_identifier` / table identity | Phase 2 — `common/app_common/ch_naming.py`. Decided 2026-09-21: the live path owns its own function; batch builds the same shape inline in another repo, so the *format* is the contract and `tests/phase2/unit/test_ch_naming.py` pins it. |
 

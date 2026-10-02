@@ -156,8 +156,9 @@ async def create_pipeline(
             await provision(config)
         except Exception as exc:
             logger.exception("provisioning failed for %s", config.pipeline_id)
-            await repo.update_state(config.pipeline_id, status=PipelineStatus.FAILED,
-                                    last_error=f"provisioning failed: {exc}")
+            # Roll the record back so the same create can simply be retried —
+            # topic and table creation are both idempotent.
+            await repo.delete_pipeline(config.pipeline_id)
             raise HTTPException(502, f"provisioning failed: {exc}") from exc
 
     return {"config": config.model_dump(), "state": state.model_dump(),

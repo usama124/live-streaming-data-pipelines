@@ -168,16 +168,11 @@ def _compose(*args: str, check: bool = True) -> subprocess.CompletedProcess:
 
 @pytest.fixture(scope="session")
 def kafka() -> str:
-    """Kafka from the root compose stack. Left as found: only torn down if we started it."""
-    running = _compose("ps", "--status", "running", "--services").stdout.split()
-    started_it = "kafka" not in running
-
+    """Kafka from the root compose stack. Never torn down: the suite shares the
+    developer's compose project, so a stack brought up mid-run would lose its
+    broker (2026-10-02, see BACKLOG)."""
     _compose("up", "-d", "--wait", "kafka")
-    try:
-        yield KAFKA_INTERNAL
-    finally:
-        if started_it:
-            _compose("rm", "-sf", "kafka", check=False)
+    yield KAFKA_INTERNAL
 
 
 @pytest.fixture(scope="session")
