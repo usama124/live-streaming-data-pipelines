@@ -124,14 +124,20 @@ async def create_pipeline(
     if request.pipeline_type == PipelineType.NORMAL and not request.airflow_dag_id:
         raise HTTPException(400, "airflow_dag_id required for normal pipelines")
     topic  = request.topic or f"pipeline.{request.pipeline_id}.events"
+    # ponytail: user_id fixed at "0" until requests carry the logged-in user.
+    user_id = request.user_id or "0"
+    if await repo.get_config(request.pipeline_id) is not None:
+        raise HTTPException(409, f"Pipeline already exists: {request.pipeline_id}")
+    collection_number = (request.collection_number
+                         or await repo.next_collection_number(user_id))
     config = PipelineConfig(
         pipeline_id=request.pipeline_id,
         pipeline_type=request.pipeline_type,
         airflow_dag_id=request.airflow_dag_id,
         source_type=request.source_type,
         topic=topic,
-        user_id=request.user_id or "0",
-        collection_number=request.collection_number or 1,
+        user_id=user_id,
+        collection_number=collection_number,
         table_name=request.table_name or "events",
         table_schema=request.table_schema,
         batch_size=request.batch_size,

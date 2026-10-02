@@ -215,6 +215,8 @@ async def _handle(fp: Path, repo: PipelineRedisRepository) -> None:
         pipeline_type=PipelineType.LIVE,
         source_type=defn.source_type,
         topic=topic,
+        user_id="0",  # ponytail: fixed until definitions carry the logged-in user
+        collection_number=await repo.next_collection_number("0"),
         batch_size=defn.batch_size,
         flush_interval_seconds=defn.flush_interval_seconds,
         source_options=defn.source_options,

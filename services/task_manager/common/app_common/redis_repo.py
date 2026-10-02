@@ -13,6 +13,7 @@ from common.app_common.models import (
 )
 from common.app_common.redis_keys import (
     PIPELINE_STATE_EVENTS_CHANNEL,
+    collection_counter_key,
     pipeline_config_key,
     pipeline_state_key,
 )
@@ -45,6 +46,20 @@ class PipelineRedisRepository:
     async def get_state(self, pipeline_id: str) -> PipelineState | None:
         raw = await self.redis.get(pipeline_state_key(pipeline_id))
         return PipelineState.model_validate_json(raw) if raw else None
+
+    async def next_collection_number(self, user_id: str) -> int:
+        """Next free collection for the user — each new pipeline gets its own table.
+
+        Never reused after a delete: the old table may still hold data. The first
+        call seeds from existing pipelines so pre-counter ones aren't collided with.
+        """
+        key = collection_counter_key(user_id)
+        if not await self.redis.exists(key):
+            used = [c.collection_number for c in
+                    [await self.get_config(pid) for pid in await self.list_pipeline_ids()]
+                    if c and c.user_id == user_id]
+            await self.redis.set(key, max(used, default=0), nx=True)
+        return int(await self.redis.incr(key))
 
     async def list_pipeline_ids(self) -> list[str]:
         keys = await self.redis.keys("pipeline:*:config")
